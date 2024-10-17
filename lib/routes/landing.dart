@@ -12,6 +12,8 @@ class LandingPage extends StatefulWidget {
 class _LandingPageState extends State<LandingPage> {
   final TextEditingController _urlControllr = TextEditingController();
 
+  bool _inputError = false;
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -19,27 +21,44 @@ class _LandingPageState extends State<LandingPage> {
         title: const Text('Movie Player'),
         centerTitle: true,
       ),
-      body: Center(
+      body: Padding(
+        padding: const EdgeInsets.all(25.0),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            Text("Vedio url"),
             Row(
               children: [
-                TextField(
-                  controller: _urlControllr,
+                Expanded(
+                  child: TextField(
+                    controller: _urlControllr,
+                    decoration: InputDecoration(
+                      hintText: 'Url',
+                      errorText: _inputError ? "Unsupported format" : null,
+                      border: const OutlineInputBorder(),
+                      focusedBorder: const  OutlineInputBorder(),
+                    ),
+                  ),
                 ),
                 const SizedBox(
                   width: 10,
                 ),
                 IconButton(
                   onPressed: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) =>
-                            PlayerPage(vedioUrl: _urlControllr.text),
-                      ),
-                    );
+                    try { 
+                      final uri = Uri.parse(_urlControllr.text);
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => PlayerPage(vedioUri: uri),
+                        ),
+                      );
+                    } catch (e) {
+                      setState(() {
+                        _inputError = true;
+                      });
+                    }
                   },
                   icon: const Icon(Icons.send),
                 ),
@@ -48,7 +67,8 @@ class _LandingPageState extends State<LandingPage> {
             const SizedBox(
               height: 15,
             ),
-            TextButton.icon(
+            Text("Select vedio from downloads"),
+            FilledButton.icon(
               label: const Text("Discover Downloads Folder"),
               icon: const Icon(Icons.download),
               onPressed: () {
