@@ -21,8 +21,6 @@ class PlayerPage extends StatefulWidget {
 class _PlayerPageState extends State<PlayerPage> {
   late final VideoPlayerController _controller;
 
-  double _speed = 1.0;
-  bool _showOverlay = false;
 
   @override
   void initState() {
@@ -51,22 +49,22 @@ class _PlayerPageState extends State<PlayerPage> {
     );
     _saveWatchPosition(
         _controller.dataSource, _controller.value.position.inMilliseconds);
-    _controller.dispose();
+    _controller.dispose();    
     super.dispose();
   }
 
-  SharedPreferences? prefs;
+  SharedPreferences? _prefs;
   Future<void> _saveWatchPosition(String dataSource, milliseconds) async {
     try {
-      prefs ??= await SharedPreferences.getInstance();
-      await prefs!.setInt(dataSource, milliseconds);
+      _prefs ??= await SharedPreferences.getInstance();
+      await _prefs!.setInt(dataSource, milliseconds);
     } catch (e) {}
   }
 
-  Future<Duration> _loadWatchPosition() async {
-    prefs ??= await SharedPreferences.getInstance();
-    return Duration(milliseconds: prefs!.getInt(_controller.dataSource) ?? 0);
-  }
+  // Future<Duration> _loadWatchPosition() async {
+  //   _prefs ??= await SharedPreferences.getInstance();
+  //   return Duration(milliseconds: _prefs!.getInt(_controller.dataSource) ?? 0);
+  // }
 
   @override
   Widget build(BuildContext context) {
@@ -74,8 +72,8 @@ class _PlayerPageState extends State<PlayerPage> {
       backgroundColor: Colors.black,
       body: FutureBuilder(
         future: _controller.initialize().then((_) async {
-          final p = await _loadWatchPosition();
-          await _controller.seekTo(p);
+          // final p = await _loadWatchPosition();
+          // await _controller.seekTo(p);
         }),
         builder: (_, sn) {
           if (sn.connectionState == ConnectionState.waiting)
