@@ -1,30 +1,69 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
+// Smoke tests for the movie player app.
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:movie_player/main.dart';
+import 'package:movie_player/routes/player.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
+  testWidgets('landing page shows the url input and the downloads button',
+      (WidgetTester tester) async {
     await tester.pumpWidget(const MoviePlayer());
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+    expect(find.text('Movie Player'), findsOneWidget);
+    expect(find.byType(TextField), findsOneWidget);
+    expect(find.byIcon(Icons.send), findsOneWidget);
+    expect(find.text('Discover Downloads Folder'), findsOneWidget);
+  });
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
+  testWidgets('empty url shows an error instead of opening the player',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(const MoviePlayer());
+
+    await tester.tap(find.byIcon(Icons.send));
     await tester.pump();
 
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    expect(find.text('Enter a valid video url'), findsOneWidget);
+    expect(find.byType(PlayerPage), findsNothing);
+  });
+
+  testWidgets('malformed url shows an error instead of opening the player',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(const MoviePlayer());
+
+    await tester.enterText(find.byType(TextField), 'not a url');
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pump();
+
+    expect(find.text('Enter a valid video url'), findsOneWidget);
+    expect(find.byType(PlayerPage), findsNothing);
+  });
+
+  testWidgets('the error clears while typing a new url',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(const MoviePlayer());
+
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pump();
+    expect(find.text('Enter a valid video url'), findsOneWidget);
+
+    await tester.enterText(find.byType(TextField), 'https://example.com/a.mp4');
+    await tester.pump();
+    expect(find.text('Enter a valid video url'), findsNothing);
+  });
+
+  testWidgets('a valid url opens the player page', (WidgetTester tester) async {
+    await tester.pumpWidget(const MoviePlayer());
+
+    // A missing scheme is completed with https://
+    await tester.enterText(find.byType(TextField), 'example.com/video.mp4');
+    await tester.tap(find.byIcon(Icons.send));
+    // Let the page transition finish.
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+
+    expect(find.byType(PlayerPage), findsOneWidget);
+    expect(find.text('Enter a valid video url'), findsNothing);
   });
 }

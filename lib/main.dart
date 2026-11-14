@@ -5,13 +5,13 @@ void main() {
   runApp(const MoviePlayer());
 }
 
-
 class MoviePlayer extends StatelessWidget {
   const MoviePlayer({super.key});
 
   @override
   Widget build(BuildContext context) {
     return const MaterialApp(
+      title: 'Movie Player',
       debugShowCheckedModeBanner: false,
       home: LandingPage(),
     );

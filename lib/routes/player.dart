@@ -1,43 +1,122 @@
-// ignore_for_file: curly_braces_in_flow_control_structures
-
 import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:video_player/video_player.dart';
 
+/// Plays a video from a local [videoFile] or from a network [videoUri].
 class PlayerPage extends StatefulWidget {
-  const PlayerPage({super.key, this.vedioFile, this.vedioUri});
-  final File? vedioFile;
-  final Uri? vedioUri;
+  const PlayerPage({super.key, this.videoFile, this.videoUri})
+      : assert(
+          videoFile != null || videoUri != null,
+          'Either videoFile or videoUri must be provided.',
+        );
+
+  final File? videoFile;
+  final Uri? videoUri;
 
   @override
   State<PlayerPage> createState() => _PlayerPageState();
 }
 
-class _PlayerPageState extends State<PlayerPage> {
+class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
   late final VideoPlayerController _controller;
 
+  /// Initialized once in [initState], building must not start it again.
+  late final Future<void> _initialization;
+
+  SharedPreferences? _prefs;
+  bool _pausedByLifecycle = false;
+
+  String get _storageKey =>
+      widget.videoFile?.path ?? widget.videoUri.toString();
 
   @override
   void initState() {
     super.initState();
-    SystemChrome.setPreferredOrientations([
+    SystemChrome.setPreferredOrientations(const [
       DeviceOrientation.landscapeRight,
       DeviceOrientation.landscapeLeft,
     ]);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-    _controller = widget.vedioFile != null
-        ? VideoPlayerController.file(widget.vedioFile!)
-        : VideoPlayerController.networkUrl(widget.vedioUri!);
+    _controller = widget.videoFile != null
+        ? VideoPlayerController.file(widget.videoFile!)
+        : VideoPlayerController.networkUrl(widget.videoUri!);
+    WidgetsBinding.instance.addObserver(this);
+    _initialization = _initialize();
+  }
+
+  Future<void> _initialize() async {
+    await _controller.initialize();
+    if (!mounted) return;
+    await _resumeWatchPosition();
+  }
+
+  /// Pauses while the app is backgrounded and resumes when it comes back.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
+      if (_controller.value.isPlaying) {
+        _pausedByLifecycle = true;
+        _controller.pause();
+      }
+    } else if (state == AppLifecycleState.resumed && _pausedByLifecycle) {
+      _pausedByLifecycle = false;
+      _controller.play();
+    }
+  }
+
+  /// Remembers where the user stopped watching, so playback can resume.
+  ///
+  /// Called from dispose(): the position is read synchronously, the rest is
+  /// best effort and must never throw while the page is closing.
+  Future<void> _saveWatchPosition() async {
+    try {
+      final positionMs = _controller.value.position.inMilliseconds;
+      final durationMs = _controller.value.duration.inMilliseconds;
+      if (durationMs <= 0 || positionMs < 5000) return;
+
+      _prefs ??= await SharedPreferences.getInstance();
+      if (durationMs - positionMs < 10000) {
+        // Almost finished: forget the position so the next play starts over.
+        await _prefs!.remove(_storageKey);
+      } else {
+        await _prefs!.setInt(_storageKey, positionMs);
+      }
+    } catch (_) {
+      // Saving the position is best effort, failures are not fatal.
+    }
+  }
+
+  /// Seeks back to the saved position of a previous session, if any.
+  Future<void> _resumeWatchPosition() async {
+    try {
+      _prefs ??= await SharedPreferences.getInstance();
+      final savedMs = _prefs!.getInt(_storageKey);
+      if (savedMs == null || savedMs <= 0) return;
+
+      final durationMs = _controller.value.duration.inMilliseconds;
+      // Do not resume close to the end, restart from the beginning instead.
+      if (durationMs <= 0 || savedMs >= durationMs - 10000) return;
+
+      await _controller.seekTo(Duration(milliseconds: savedMs));
+    } catch (_) {
+      // Resuming is best effort, failures are not fatal.
+    }
+  }
+
+  String _errorMessage(Object? error) {
+    if (error is PlatformException) return error.message ?? error.code;
+    return error?.toString() ?? 'Unknown error!';
   }
 
   @override
-  dispose() {
-    SystemChrome.setPreferredOrientations([
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    SystemChrome.setPreferredOrientations(const [
       DeviceOrientation.landscapeRight,
       DeviceOrientation.landscapeLeft,
       DeviceOrientation.portraitUp,
@@ -47,75 +126,112 @@ class _PlayerPageState extends State<PlayerPage> {
       SystemUiMode.manual,
       overlays: SystemUiOverlay.values,
     );
-    _saveWatchPosition(
-        _controller.dataSource, _controller.value.position.inMilliseconds);
-    _controller.dispose();    
+    _saveWatchPosition();
+    _controller.dispose();
     super.dispose();
   }
-
-  SharedPreferences? _prefs;
-  Future<void> _saveWatchPosition(String dataSource, milliseconds) async {
-    try {
-      _prefs ??= await SharedPreferences.getInstance();
-      await _prefs!.setInt(dataSource, milliseconds);
-    } catch (e) {}
-  }
-
-  // Future<Duration> _loadWatchPosition() async {
-  //   _prefs ??= await SharedPreferences.getInstance();
-  //   return Duration(milliseconds: _prefs!.getInt(_controller.dataSource) ?? 0);
-  // }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
-      body: FutureBuilder(
-        future: _controller.initialize().then((_) async {
-          // final p = await _loadWatchPosition();
-          // await _controller.seekTo(p);
-        }),
-        builder: (_, sn) {
-          if (sn.connectionState == ConnectionState.waiting)
+      body: FutureBuilder<void>(
+        future: _initialization,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(
               child: SizedBox.square(
                 dimension: 35,
                 child: CircularProgressIndicator(),
               ),
             );
-          if (!_controller.value.hasError)
-            return _VideoLayers(controller: _controller);
-          else
-            return Center(
-              child: Text(
-                _controller.value.errorDescription ?? "Unknown error!",
-                style: const TextStyle(color: Colors.white),
-              ),
+          }
+
+          if (snapshot.hasError || _controller.value.hasError) {
+            return _PlaybackError(
+              message: _controller.value.errorDescription ??
+                  _errorMessage(snapshot.error),
             );
+          }
+
+          return _VideoLayers(controller: _controller);
         },
       ),
     );
   }
 }
 
+/// Full screen error message with a way back to the previous page.
+class _PlaybackError extends StatelessWidget {
+  const _PlaybackError({required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(
+              Icons.error_outline,
+              size: 40,
+              color: Colors.white70,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.white),
+            ),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: () => Navigator.maybePop(context),
+              icon: const Icon(Icons.arrow_back),
+              label: const Text('Go back'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _VideoLayers extends StatefulWidget {
-  const _VideoLayers({super.key, required this.controller});
+  const _VideoLayers({required this.controller});
+
   final VideoPlayerController controller;
 
   @override
-  State<_VideoLayers> createState() => __VideoLayersState();
+  State<_VideoLayers> createState() => _VideoLayersState();
 }
 
-class __VideoLayersState extends State<_VideoLayers> {
+class _VideoLayersState extends State<_VideoLayers> {
+  static const List<double> _speeds = [
+    0.25,
+    0.5,
+    0.75,
+    1,
+    1.25,
+    1.5,
+    1.75,
+    2,
+  ];
+
   VideoPlayerController get _controller => widget.controller;
 
   bool _showOverlay = false;
 
+  /// Speed to restore when a long press (2x) is released.
+  double _speedBeforeHold = 1;
+
   final ValueNotifier<double?> _timelineDragHandlerOffset = ValueNotifier(null);
   final GlobalKey _timeLineKey = GlobalKey();
 
-  final _timeLineHorPadding = 15.0;
-  final _timeLineVerPadding = 6.0;
+  final double _timeLineHorPadding = 15;
+  final double _timeLineVerPadding = 6;
   late final ValueNotifier<bool> _loading;
 
   @override
@@ -123,185 +239,284 @@ class __VideoLayersState extends State<_VideoLayers> {
     super.initState();
 
     _loading = ValueNotifier(_controller.value.isBuffering);
-    _controller.addListener(() {
-      _loading.value = _controller.value.isBuffering;
-    });
+    _controller.addListener(_onControllerUpdate);
 
     _controller.play();
   }
 
-  void _showOverlay_() {
-    setState(() {
-      _showOverlay = true;
-    });
+  @override
+  void dispose() {
+    _controller.removeListener(_onControllerUpdate);
+    _loading.dispose();
+    _timelineDragHandlerOffset.dispose();
+    super.dispose();
   }
 
-  void _hideOverlay() {
-    setState(() {
-      _showOverlay = false;
-    });
-  }
-
-  void _pause() {
-    _controller.pause();
-  }
-
-  void _play() {
-    _controller.play();
-    if (_showOverlay) _hideOverlay();
-  }
-
-  void _pausePlay() {
-    if (_controller.value.isPlaying) {
-      _showOverlay_();
-      _pause();
-    } else {
-      _play();
+  void _onControllerUpdate() {
+    _loading.value = _controller.value.isBuffering;
+    if (!mounted) return;
+    // Keep the visible controls (time line, progress) up to date and bring
+    // them back once the video finished.
+    if (_showOverlay || _controller.value.isCompleted) {
+      setState(() {
+        if (_controller.value.isCompleted) _showOverlay = true;
+      });
     }
   }
 
-  double _previousSpeed = 1;
-  Future<void> _speed(double speed) async {
-    _previousSpeed = _controller.value.playbackSpeed;
-    await _controller.setPlaybackSpeed(speed);
-    setState(() {});
+  void _showControls() {
+    setState(() => _showOverlay = true);
   }
 
-  Future<void> _skipMoment() async {
-    await _controller
-        .seekTo(_controller.value.position + const Duration(seconds: 5));
-    setState(() {});
+  void _hideControls() {
+    setState(() => _showOverlay = false);
   }
 
-  Future<void> _rollbackMoment() async {
-    await _controller
-        .seekTo(_controller.value.position - const Duration(seconds: 5));
-    setState(() {});
+  Future<void> _pause() async {
+    await _controller.pause();
   }
 
-  Future<void> _setMoment(int dx, double timeLineWidth) async {
-    final d = _controller.value.duration;
-    final momentInMilliseconds =
-        (dx * d.inMilliseconds / timeLineWidth).round();
-
-    await _controller.seekTo(Duration(milliseconds: momentInMilliseconds));
-    setState(() {});
+  Future<void> _play() async {
+    await _controller.play();
+    if (mounted && _showOverlay) _hideControls();
   }
 
-  late final _timeLineWidth =
-      (_timeLineKey.currentContext!.findRenderObject() as RenderBox).size.width;
+  Future<void> _pausePlay() async {
+    if (_controller.value.isPlaying) {
+      _showControls();
+      await _pause();
+    } else {
+      await _play();
+    }
+  }
+
+  Future<void> _cycleSpeed() async {
+    final current = _controller.value.playbackSpeed;
+    final index = _speeds.indexWhere((s) => (s - current).abs() < 0.001);
+
+    final double next;
+    if (index == -1) {
+      // Not one of the predefined speeds (e.g. a custom speed): pick the
+      // next higher one, wrapping around to the slowest.
+      next = _speeds.firstWhere((s) => s > current, orElse: () => _speeds.first);
+    } else {
+      next = _speeds[(index + 1) % _speeds.length];
+    }
+
+    await _controller.setPlaybackSpeed(next);
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _startSpeedHold() async {
+    _speedBeforeHold = _controller.value.playbackSpeed;
+    await _controller.setPlaybackSpeed(2);
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _endSpeedHold() async {
+    await _controller.setPlaybackSpeed(_speedBeforeHold);
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _seekBy(Duration delta) async {
+    final durationMs = _controller.value.duration.inMilliseconds;
+    var targetMs =
+        _controller.value.position.inMilliseconds + delta.inMilliseconds;
+    if (durationMs > 0 && targetMs > durationMs) targetMs = durationMs;
+    if (targetMs < 0) targetMs = 0;
+
+    await _controller.seekTo(Duration(milliseconds: targetMs));
+    if (mounted) setState(() {});
+  }
+
+  /// Width of the time line, `0` while it is not laid out yet.
+  double get _timeLineWidth {
+    final box = _timeLineKey.currentContext?.findRenderObject();
+    if (box is RenderBox && box.hasSize) return box.size.width;
+    return 0;
+  }
+
+  Future<void> _seekToMoment(double dx) async {
+    final width = _timeLineWidth;
+    final durationMs = _controller.value.duration.inMilliseconds;
+    if (width <= 0 || durationMs <= 0) return;
+
+    var momentMs = (dx * durationMs / width).round();
+    if (momentMs < 0) momentMs = 0;
+    if (momentMs > durationMs) momentMs = durationMs;
+
+    await _controller.seekTo(Duration(milliseconds: momentMs));
+    if (mounted) setState(() {});
+  }
+
+  void _endTimelineDrag() {
+    final dx = _timelineDragHandlerOffset.value;
+    _timelineDragHandlerOffset.value = null;
+    if (dx != null) _seekToMoment(dx);
+  }
+
+  /// Progress of the playback between 0 and 1, safe for unknown durations.
+  double get _progress {
+    final durationMs = _controller.value.duration.inMilliseconds;
+    if (durationMs <= 0) return 0;
+
+    var positionMs = _controller.value.position.inMilliseconds;
+    if (positionMs < 0) positionMs = 0;
+    if (positionMs > durationMs) positionMs = durationMs;
+    return positionMs / durationMs;
+  }
+
+  String _formatDuration(Duration duration) {
+    final totalSeconds = duration.inSeconds;
+    final hours = totalSeconds ~/ 3600;
+    final minutes = (totalSeconds % 3600) ~/ 60;
+    final seconds = totalSeconds % 60;
+    return '$hours:${minutes.toString().padLeft(2, '0')}:'
+        '${seconds.toString().padLeft(2, '0')}';
+  }
+
+  String get _speedLabel {
+    final speed = _controller.value.playbackSpeed;
+    final rounded = speed.roundToDouble();
+    return '${speed == rounded ? rounded.toInt() : speed}x';
+  }
+
+  KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+
+    switch (event.logicalKey) {
+      case LogicalKeyboardKey.escape:
+        Navigator.maybePop(context);
+        return KeyEventResult.handled;
+      case LogicalKeyboardKey.space:
+        _pausePlay();
+        return KeyEventResult.handled;
+      case LogicalKeyboardKey.arrowRight:
+        _seekBy(const Duration(seconds: 5));
+        return KeyEventResult.handled;
+      case LogicalKeyboardKey.arrowLeft:
+        _seekBy(const Duration(seconds: -5));
+        return KeyEventResult.handled;
+      default:
+        return KeyEventResult.ignored;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        Center(
-          child: AspectRatio(
-            aspectRatio: widget.controller.value.aspectRatio,
-            child: VideoPlayer(widget.controller),
-          ),
-        ),
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Expanded(
-              flex: 3,
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Expanded(
-                    child: GestureDetector(
-                      onDoubleTap: _rollbackMoment,
-                      onTap: _pausePlay,
-                      child: const ColoredBox(color: Colors.transparent),
-                    ),
-                  ),
-                  Expanded(
-                    child: GestureDetector(
-                      onDoubleTap: _skipMoment,
-                      onTap: _pausePlay,
-                      onLongPressStart: (_) {
-                        _speed(2);
-                      },
-                      onLongPressUp: () {
-                        _speed(_previousSpeed);
-                      },
-                      child: const ColoredBox(color: Colors.transparent),
-                    ),
-                  ),
-                ],
-              ),
+    return Focus(
+      autofocus: true,
+      onKeyEvent: _handleKeyEvent,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          Center(
+            child: AspectRatio(
+              aspectRatio: _controller.value.aspectRatio,
+              child: VideoPlayer(_controller),
             ),
-            Expanded(
-              flex: 4,
-              child: GestureDetector(
-                child: const ColoredBox(color: Colors.transparent),
-                onTapDown: (_) => _pause(),
-                onTapUp: (_) => _play(),
-              ),
-            ),
-          ],
-        ),
-        if (_showOverlay) ...[
-          ValueListenableBuilder(
-            valueListenable: _timelineDragHandlerOffset,
-            builder: (context, dx, _) {
-              return Positioned(
-                bottom: _timeLineVerPadding + 2,
-                left: _timeLineHorPadding,
-                right: _timeLineHorPadding,
-                height: 30,
-                child: GestureDetector(
-                  onPanUpdate: (dets) {
-                    _timelineDragHandlerOffset.value =
-                        max(0, min(dets.localPosition.dx, _timeLineWidth));
-                  },
-                  onPanDown: (dets) {
-                    _timelineDragHandlerOffset.value = dets.localPosition.dx;
-                  },
-                  onPanEnd: (dets) {
-                    _setMoment(_timelineDragHandlerOffset.value!.round(),
-                        _timeLineWidth);
-                    _timelineDragHandlerOffset.value = null;
-                  },
-                  onPanCancel: () {
-                    _setMoment(_timelineDragHandlerOffset.value!.round(),
-                        _timeLineWidth);
-                    _timelineDragHandlerOffset.value = null;
-                  },
-                  child: ColoredBox(
-                    color: Colors.transparent,
-                    child: dx == null
-                        ? const SizedBox.shrink()
-                        : Align(
-                            alignment: Alignment.centerLeft,
-                            child: SizedBox(
-                              width: dx,
-                              height: 30,
-                              child: const ColoredBox(color: Colors.white),
-                            ),
-                          ),
-                  ),
-                ),
-              );
-            },
           ),
-          Padding(
-            padding: EdgeInsets.symmetric(
-                horizontal: _timeLineHorPadding, vertical: _timeLineVerPadding),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                Row(
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                flex: 3,
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    () {
-                      final p = _controller.value.position;
-                      final d = _controller.value.duration;
-
-                      return Text(
-                        "${p.inHours}:${p.inMinutes}:${p.inSeconds} / ${d.inHours}:${d.inMinutes}:${d.inSeconds}",
+                    Expanded(
+                      child: GestureDetector(
+                        onDoubleTap: () =>
+                            _seekBy(const Duration(seconds: -5)),
+                        onTap: _pausePlay,
+                        child: const ColoredBox(color: Colors.transparent),
+                      ),
+                    ),
+                    Expanded(
+                      child: GestureDetector(
+                        onDoubleTap: () =>
+                            _seekBy(const Duration(seconds: 5)),
+                        onTap: _pausePlay,
+                        onLongPressStart: (_) => _startSpeedHold(),
+                        onLongPressUp: _endSpeedHold,
+                        onLongPressCancel: _endSpeedHold,
+                        child: const ColoredBox(color: Colors.transparent),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                flex: 4,
+                child: GestureDetector(
+                  onTapDown: (_) => _pause(),
+                  onTapUp: (_) => _play(),
+                  child: const ColoredBox(color: Colors.transparent),
+                ),
+              ),
+            ],
+          ),
+          if (_showOverlay) ...[
+            Positioned(
+              top: 4,
+              left: 4,
+              child: IconButton(
+                onPressed: () => Navigator.maybePop(context),
+                icon: const Icon(Icons.close, color: Colors.white),
+                tooltip: 'Close player',
+              ),
+            ),
+            ValueListenableBuilder<double?>(
+              valueListenable: _timelineDragHandlerOffset,
+              builder: (context, dx, _) {
+                return Positioned(
+                  bottom: _timeLineVerPadding + 2,
+                  left: _timeLineHorPadding,
+                  right: _timeLineHorPadding,
+                  height: 30,
+                  child: GestureDetector(
+                    onPanDown: (dets) {
+                      _timelineDragHandlerOffset.value = dets.localPosition.dx;
+                    },
+                    onPanUpdate: (dets) {
+                      _timelineDragHandlerOffset.value = max(
+                        0,
+                        min(dets.localPosition.dx, _timeLineWidth),
+                      );
+                    },
+                    onPanEnd: (_) => _endTimelineDrag(),
+                    onPanCancel: _endTimelineDrag,
+                    child: ColoredBox(
+                      color: Colors.transparent,
+                      child: dx == null
+                          ? const SizedBox.shrink()
+                          : Align(
+                              alignment: Alignment.centerLeft,
+                              child: SizedBox(
+                                width: dx,
+                                height: 30,
+                                child: const ColoredBox(color: Colors.white),
+                              ),
+                            ),
+                    ),
+                  ),
+                );
+              },
+            ),
+            Padding(
+              padding: EdgeInsets.symmetric(
+                horizontal: _timeLineHorPadding,
+                vertical: _timeLineVerPadding,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  Row(
+                    children: [
+                      Text(
+                        '${_formatDuration(_controller.value.position)} / '
+                        '${_formatDuration(_controller.value.duration)}',
                         style: const TextStyle(
                           color: Colors.white,
                           fontSize: 13,
@@ -311,83 +526,60 @@ class __VideoLayersState extends State<_VideoLayers> {
                               offset: Offset.zero,
                               spreadRadius: 2,
                               blurRadius: 2,
-                            )
+                            ),
                           ],
                         ),
-                      );
-                    }(),
-                    const Spacer(),
-                    IconButton(
-                      onPressed: () {
-                        final speeds = <double>[
-                          .25,
-                          0.5,
-                          0.75,
-                          1,
-                          1.25,
-                          1.5,
-                          1.75,
-                          2
-                        ];
-                        final s = _controller.value.playbackSpeed;
-
-                        _speed(
-                          speeds.elementAtOrNull(speeds.indexOf(s) + 1) ??
-                              speeds.elementAt(0),
-                        );
-                      },
-                      icon: Text(
-                        () {
-                          final s = _controller.value.playbackSpeed;
-                          return "${s}x";
-                        }(),
-                        style: const TextStyle(color: Colors.white),
                       ),
-                    )
-                  ],
-                ),
-                SizedBox(
-                  height: 2,
-                  child: Stack(
-                    key: _timeLineKey,
-                    fit: StackFit.expand,
-                    children: [
-                      ColoredBox(
-                        color: Colors.white.withOpacity(.3),
-                      ),
-                      FractionallySizedBox(
-                        widthFactor:
-                            (_controller.value.position.inMilliseconds == 0
-                                    ? 1
-                                    : _controller
-                                        .value.position.inMilliseconds) /
-                                _controller.value.duration.inMilliseconds,
-                        alignment: Alignment.centerLeft,
-                        child: const ColoredBox(
-                          color: Colors.white,
+                      const Spacer(),
+                      IconButton(
+                        onPressed: _cycleSpeed,
+                        icon: Text(
+                          _speedLabel,
+                          style: const TextStyle(color: Colors.white),
                         ),
+                        tooltip: 'Playback speed',
                       ),
                     ],
                   ),
-                ),
-              ],
+                  SizedBox(
+                    height: 2,
+                    child: Stack(
+                      key: _timeLineKey,
+                      fit: StackFit.expand,
+                      children: [
+                        ColoredBox(
+                          color: Colors.white.withValues(alpha: 0.3),
+                        ),
+                        FractionallySizedBox(
+                          widthFactor: _progress,
+                          alignment: Alignment.centerLeft,
+                          child: const ColoredBox(
+                            color: Colors.white,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
-        ValueListenableBuilder(
+          ],
+          ValueListenableBuilder<bool>(
             valueListenable: _loading,
-            builder: (_, loading, __) {
-              if (loading)
+            builder: (context, loading, _) {
+              if (loading) {
                 return const Center(
                   child: SizedBox.square(
                     dimension: 35,
                     child: CircularProgressIndicator(),
                   ),
                 );
-              else
-                return const SizedBox.shrink();
-            })
-      ],
+              }
+              return const SizedBox.shrink();
+            },
+          ),
+        ],
+      ),
     );
   }
 }
