@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:movie_player/routes/downloads.dart';
+import 'package:movie_player/routes/selected_folder_videos.dart';
+import 'package:movie_player/routes/local_videos_repo.dart';
 import 'package:movie_player/routes/player.dart';
 
 class LandingPage extends StatefulWidget {
@@ -104,9 +105,10 @@ class _LandingPageState extends State<LandingPage> {
             ),
             const Text('Select video from downloads'),
             FilledButton.icon(
-              label: const Text('Discover Downloads Folder'),
+              label: const Text('Select a Folder'),
               icon: const Icon(Icons.download),
-              onPressed: () {
+              onPressed: () async {
+                final videos = await selectVideosFolder();
                 Navigator.push(
                   context,
                   MaterialPageRoute(
