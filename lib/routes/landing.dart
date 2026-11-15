@@ -1,3 +1,4 @@
+import 'package:dir_picker/dir_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:movie_player/routes/selected_folder_videos.dart';
 import 'package:movie_player/routes/local_videos_repo.dart';
@@ -14,6 +15,10 @@ class _LandingPageState extends State<LandingPage> {
   final TextEditingController _urlController = TextEditingController();
 
   bool _inputError = false;
+
+  /// True while the folder picker is open, so the button can't be tapped
+  /// twice (`DirPicker` rejects a second pick).
+  bool _picking = false;
 
   @override
   void dispose() {
@@ -69,6 +74,9 @@ class _LandingPageState extends State<LandingPage> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             const Text('Video url'),
+                  const SizedBox(
+              height: 5,
+            ),
             Row(
               children: [
                 Expanded(
@@ -90,12 +98,12 @@ class _LandingPageState extends State<LandingPage> {
                     ),
                   ),
                 ),
-                const SizedBox(
-                  width: 10,
-                ),
+                // const SizedBox(
+                //   width: 10,
+                // ),
                 IconButton(
                   onPressed: _submit,
-                  icon: const Icon(Icons.send),
+                  icon: const Icon(Icons.play_arrow_rounded),
                   tooltip: 'Play',
                 ),
               ],
@@ -103,23 +111,50 @@ class _LandingPageState extends State<LandingPage> {
             const SizedBox(
               height: 15,
             ),
-            const Text('Select video from downloads'),
+            const Text('Play videos from folder'),
             FilledButton.icon(
               label: const Text('Select a Folder'),
-              icon: const Icon(Icons.download),
-              onPressed: () async {
-                final videos = await selectVideosFolder();
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => const DownloadsPage(),
-                  ),
-                );
-              },
+              icon: const Icon(Icons.folder_open_rounded),
+              onPressed: _picking ? null : _pickFolder,
             ),
           ],
         ),
       ),
     );
+  }
+
+  /// Picks a folder and opens the page listing its video files.
+  Future<void> _pickFolder() async {
+    setState(() => _picking = true);
+    try {
+      final entries = await selectVideosFolder();
+      // The user cancelled the picker: stay on the landing page.
+      if (entries == null || !mounted) return;
+
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => SelectedFolderVideosPage(entries: entries),
+        ),
+      );
+    } on DirPickerException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_folderErrorMessage(error))),
+      );
+    } finally {
+      if (mounted) setState(() => _picking = false);
+    }
+  }
+
+  String _folderErrorMessage(DirPickerException error) {
+    switch (error.code) {
+      case DirPickerException.alreadyActive:
+        return 'A folder picker is already open';
+      case DirPickerException.listError:
+        return 'The selected folder could not be read';
+      default:
+        return error.message ?? 'Could not open the folder picker';
+    }
   }
 }

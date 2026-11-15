@@ -233,14 +233,15 @@ class _VideoLayersState extends State<_VideoLayers> {
   final double _timeLineHorPadding = 15;
   final double _timeLineVerPadding = 6;
   late final ValueNotifier<bool> _loading;
+  late final ValueNotifier<bool> _playPause;
 
   @override
   void initState() {
     super.initState();
 
     _loading = ValueNotifier(_controller.value.isBuffering);
+    _playPause = ValueNotifier(_controller.value.isPlaying);
     _controller.addListener(_onControllerUpdate);
-
     _controller.play();
   }
 
@@ -248,12 +249,14 @@ class _VideoLayersState extends State<_VideoLayers> {
   void dispose() {
     _controller.removeListener(_onControllerUpdate);
     _loading.dispose();
+    _playPause.dispose();
     _timelineDragHandlerOffset.dispose();
     super.dispose();
   }
 
   void _onControllerUpdate() {
     _loading.value = _controller.value.isBuffering;
+    _playPause.value = _controller.value.isPlaying;
     if (!mounted) return;
     // Keep the visible controls (time line, progress) up to date and bring
     // them back once the video finished.
@@ -298,7 +301,8 @@ class _VideoLayersState extends State<_VideoLayers> {
     if (index == -1) {
       // Not one of the predefined speeds (e.g. a custom speed): pick the
       // next higher one, wrapping around to the slowest.
-      next = _speeds.firstWhere((s) => s > current, orElse: () => _speeds.first);
+      next =
+          _speeds.firstWhere((s) => s > current, orElse: () => _speeds.first);
     } else {
       next = _speeds[(index + 1) % _speeds.length];
     }
@@ -426,16 +430,14 @@ class _VideoLayersState extends State<_VideoLayers> {
                   children: [
                     Expanded(
                       child: GestureDetector(
-                        onDoubleTap: () =>
-                            _seekBy(const Duration(seconds: -5)),
+                        onDoubleTap: () => _seekBy(const Duration(seconds: -5)),
                         onTap: _pausePlay,
                         child: const ColoredBox(color: Colors.transparent),
                       ),
                     ),
                     Expanded(
                       child: GestureDetector(
-                        onDoubleTap: () =>
-                            _seekBy(const Duration(seconds: 5)),
+                        onDoubleTap: () => _seekBy(const Duration(seconds: 5)),
                         onTap: _pausePlay,
                         onLongPressStart: (_) => _startSpeedHold(),
                         onLongPressUp: _endSpeedHold,
@@ -456,6 +458,32 @@ class _VideoLayersState extends State<_VideoLayers> {
               ),
             ],
           ),
+          Positioned(
+            top: 16,
+            right: 10,
+            child: ValueListenableBuilder(
+                valueListenable: _playPause,
+                builder: (context, value, child) {
+                  return AnimatedOpacity(
+                    opacity: !value ? 1 : 0,
+                    curve: Curves.linearToEaseOut,
+                    duration: Duration(
+                      milliseconds: 200,
+                    ),
+                    child: AnimatedScale(
+                      scale: !value ? 1 : 0,
+                      curve: Curves.linearToEaseOut,
+                      duration: Duration(
+                        milliseconds: 200,
+                      ),
+                      child: Icon(
+                        Icons.pause_rounded,
+                        color: Colors.white.withValues(alpha: _showOverlay ? 1 : .2),
+                      ),
+                    ),
+                  );
+                }),
+          ),
           if (_showOverlay) ...[
             Positioned(
               top: 4,
@@ -470,7 +498,7 @@ class _VideoLayersState extends State<_VideoLayers> {
               valueListenable: _timelineDragHandlerOffset,
               builder: (context, dx, _) {
                 return Positioned(
-                  bottom: _timeLineVerPadding + 2,
+                  bottom: _timeLineVerPadding + 5,
                   left: _timeLineHorPadding,
                   right: _timeLineHorPadding,
                   height: 30,
@@ -495,7 +523,18 @@ class _VideoLayersState extends State<_VideoLayers> {
                               child: SizedBox(
                                 width: dx,
                                 height: 30,
-                                child: const ColoredBox(color: Colors.white),
+                                child: DecoratedBox(
+                                  decoration: BoxDecoration(
+                                    gradient: LinearGradient(
+                                      begin: AlignmentGeometry.bottomCenter,
+                                      end: AlignmentGeometry.topCenter,
+                                      colors: [
+                                        Colors.white,
+                                        Colors.white.withValues(alpha: 0),
+                                      ],
+                                    ),
+                                  ),
+                                ),
                               ),
                             ),
                     ),
@@ -542,7 +581,7 @@ class _VideoLayersState extends State<_VideoLayers> {
                     ],
                   ),
                   SizedBox(
-                    height: 2,
+                    height: 5,
                     child: Stack(
                       key: _timeLineKey,
                       fit: StackFit.expand,
@@ -571,7 +610,11 @@ class _VideoLayersState extends State<_VideoLayers> {
                 return const Center(
                   child: SizedBox.square(
                     dimension: 35,
-                    child: CircularProgressIndicator(),
+                    child: CircularProgressIndicator(
+                      color: Colors.white,
+                      strokeCap: StrokeCap.round,
+                      strokeWidth: 5,
+                    ),
                   ),
                 );
               }

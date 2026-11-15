@@ -7,10 +7,13 @@ Future<List<FileSystemEntry>?> selectVideosFolder() async {
     return null;
   }
 
-  // Keep permission across app restarts if needed.
-  final token = await DirPicker.persist(location);
-
-  // Save token in SharedPreferences if you want to restore it later.
+  // Keep permission across app restarts if needed. Persisting is best
+  // effort: a failure here must not stop the folder from being listed.
+  try {
+    await DirPicker.persist(location);
+  } catch (_) {
+    // Ignored: the current session can still list the folder.
+  }
 
   final entries = await DirPicker.listEntries(
     location,
