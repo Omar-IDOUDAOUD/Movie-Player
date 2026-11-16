@@ -3,6 +3,7 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:movie_player/routes/watch_history.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:video_player/video_player.dart';
 
@@ -63,6 +64,10 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
         _pausedByLifecycle = true;
         _controller.pause();
       }
+      // Remember the progress while it is still readable: the system can
+      // kill the app in the background without disposing the page.
+      _saveWatchPosition();
+      _recordHistory();
     } else if (state == AppLifecycleState.resumed && _pausedByLifecycle) {
       _pausedByLifecycle = false;
       _controller.play();
@@ -108,6 +113,49 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     }
   }
 
+  /// Name shown in the watch history: the file name or the url.
+  String get _title {
+    final file = widget.videoFile;
+    if (file != null) {
+      final path = file.path;
+      final index = path.lastIndexOf(RegExp(r'[/\\]'));
+      if (index >= 0 && index < path.length - 1) return path.substring(index + 1);
+      return path;
+    }
+    return widget.videoUri.toString();
+  }
+
+  /// The video as a uri string, for the watch history.
+  String get _historyUri => widget.videoFile != null
+      ? Uri.file(widget.videoFile!.path).toString()
+      : widget.videoUri.toString();
+
+  /// Remembers this video in the watch history with the current position.
+  ///
+  /// Called while the position is still readable, best effort like
+  /// [_saveWatchPosition]: it must never throw while the page is closing.
+  Future<void> _recordHistory() async {
+    try {
+      final durationMs = _controller.value.duration.inMilliseconds;
+      final positionMs = _controller.value.position.inMilliseconds;
+      // Require a second of playback so a video that was only opened
+      // without being watched doesn't fill the history.
+      if (durationMs <= 0 || positionMs < 1000) return;
+
+      await WatchHistory.record(
+        WatchHistoryEntry(
+          uri: _historyUri,
+          title: _title,
+          durationMs: durationMs,
+          positionMs: positionMs,
+          watchedAt: DateTime.now(),
+        ),
+      );
+    } catch (_) {
+      // History is best effort, failures are not fatal.
+    }
+  }
+
   String _errorMessage(Object? error) {
     if (error is PlatformException) return error.message ?? error.code;
     return error?.toString() ?? 'Unknown error!';
@@ -127,6 +175,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
       overlays: SystemUiOverlay.values,
     );
     _saveWatchPosition();
+    _recordHistory();
     _controller.dispose();
     super.dispose();
   }
@@ -317,6 +366,20 @@ class _VideoLayersState extends State<_VideoLayers> {
     if (mounted) setState(() {});
   }
 
+  /// Switches the player between portrait and landscape.
+  void _toggleOrientation() {
+    final isPortrait =
+        MediaQuery.orientationOf(context) == Orientation.portrait;
+    SystemChrome.setPreferredOrientations(
+      isPortrait
+          ? const [
+              DeviceOrientation.landscapeLeft,
+              DeviceOrientation.landscapeRight,
+            ]
+          : const [DeviceOrientation.portraitUp],
+    );
+  }
+
   Future<void> _endSpeedHold() async {
     await _controller.setPlaybackSpeed(_speedBeforeHold);
     if (mounted) setState(() {});
@@ -408,6 +471,8 @@ class _VideoLayersState extends State<_VideoLayers> {
 
   @override
   Widget build(BuildContext context) {
+    final isPortrait =
+        MediaQuery.orientationOf(context) == Orientation.portrait;
     return Focus(
       autofocus: true,
       onKeyEvent: _handleKeyEvent,
@@ -570,6 +635,16 @@ class _VideoLayersState extends State<_VideoLayers> {
                         ),
                       ),
                       const Spacer(),
+                      IconButton(
+                        onPressed: _toggleOrientation,
+                        icon: const Icon(
+                          Icons.screen_rotation,
+                          color: Colors.white,
+                        ),
+                        tooltip: isPortrait
+                            ? 'Switch to landscape'
+                            : 'Switch to portrait',
+                      ),
                       IconButton(
                         onPressed: _cycleSpeed,
                         icon: Text(
