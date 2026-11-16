@@ -180,6 +180,8 @@ final _packer = RegExp(
 );
 
 /// Whether [url] points at something a video player can open.
+bool isVideoUrl(String url) => _looksLikeVideo(url);
+
 bool _looksLikeVideo(String url) {
   final lower = url.toLowerCase();
   for (final extension in _mediaExtensions) {

@@ -1,7 +1,7 @@
 // Unit tests for the web page video scraper.
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:movie_player/routes/web_video.dart';
+import 'package:movie_player/routes/web_video_extractor_1.dart';
 
 void main() {
   final base = Uri.parse('https://example.com/episodes/one/');

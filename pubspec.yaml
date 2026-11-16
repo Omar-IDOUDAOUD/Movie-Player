@@ -44,6 +44,9 @@ dependencies:
   shared_preferences: ^2.5.6
   fc_native_video_thumbnail: ^4.0.0
   dir_picker: ^0.8.0
+  # Second video extraction path: an invisible WebView that runs the page's
+  # javascript and intercepts the network requests of the player.
+  flutter_inappwebview: ^6.1.5
 
 dev_dependencies:
   flutter_test:

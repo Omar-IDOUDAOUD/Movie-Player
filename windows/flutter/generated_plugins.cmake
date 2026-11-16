@@ -4,6 +4,7 @@
 
 list(APPEND FLUTTER_PLUGIN_LIST
   fc_native_video_thumbnail
+  flutter_inappwebview_windows
   permission_handler_windows
 )
 

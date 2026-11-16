@@ -4,7 +4,8 @@ import 'package:movie_player/routes/history.dart';
 import 'package:movie_player/routes/local_videos_repo.dart';
 import 'package:movie_player/routes/player.dart';
 import 'package:movie_player/routes/selected_folder_videos.dart';
-import 'package:movie_player/routes/web_video.dart' as web;
+import 'package:movie_player/routes/web_video_extractor_1.dart';
+import 'package:movie_player/routes/web_video_extractor_2.dart' as webview;
 
 class LandingPage extends StatefulWidget {
   const LandingPage({
@@ -15,7 +16,8 @@ class LandingPage extends StatefulWidget {
 
   final VoidCallback onToggleTheme;
 
-  /// Scans a web page for videos. Defaults to [web.findVideosOnPage];
+  /// Scans a web page for videos with both extraction mechanisms (html
+  /// scraping and invisible WebView). Defaults to [webview.findAllVideosOnPage];
   /// tests inject a stub so no network is used.
   final Future<List<Uri>> Function(Uri page)? findVideos;
 
@@ -121,9 +123,27 @@ class _LandingPageState extends State<LandingPage> {
     return _findVideos(page);
   }
 
+  /// Runs both extraction mechanisms on [page] and merges their results.
+  ///
+  /// v1 downloads and follows the player iframes, v2 runs the page in an
+  /// invisible WebView and intercepts its requests; a video found by either
+  /// is offered to the user. The page itself failing still throws, so the
+  /// user learns it could not be read.
+  Future<List<Uri>> findAllVideosOnPage(Uri page) async {
+    final fromWebView = webview.findVideosWithWebView(page);
+    final fromHtml = await findVideosOnPage(page);
+    final fromRequests = await fromWebView;
+
+    final all = <String, Uri>{};
+    for (final video in [...fromHtml, ...fromRequests]) {
+      all.putIfAbsent(video.toString(), () => video);
+    }
+    return all.values.toList();
+  }
+
   Future<void> _findVideos(Uri page) async {
     try {
-      final scan = widget.findVideos ?? web.findVideosOnPage;
+      final scan = widget.findVideos ?? findAllVideosOnPage;
       final videos = await scan(page);
       if (!mounted) return;
       setState(() => _scanning = false);
