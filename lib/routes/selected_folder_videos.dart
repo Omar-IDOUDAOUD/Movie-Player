@@ -43,9 +43,8 @@ class _SelectedFolderVideosPageState extends State<SelectedFolderVideosPage> {
         .where((entry) => !entry.isDirectory && entry.uri != null)
         .toList();
     videos.sort(
-      (a, b) => a.relativePath
-          .toLowerCase()
-          .compareTo(b.relativePath.toLowerCase()),
+      (a, b) =>
+          a.relativePath.toLowerCase().compareTo(b.relativePath.toLowerCase()),
     );
     return videos;
   }
@@ -66,11 +65,17 @@ class _SelectedFolderVideosPageState extends State<SelectedFolderVideosPage> {
 
     final Widget player;
     if (uri.scheme == 'file') {
-      player = PlayerPage(videoFile: File.fromUri(uri));
+      player = PlayerPage(
+        videoFile: File.fromUri(uri),
+        videoTitle: entry.name,
+      );
     } else {
       // content:// uris from Android's storage access framework are read
       // through the media content resolver, so they are passed as a uri.
-      player = PlayerPage(videoUri: uri);
+      player = PlayerPage(
+        videoUri: uri,
+        videoTitle: entry.name,
+      );
     }
     Navigator.push(
       context,

@@ -9,7 +9,7 @@ import 'package:video_player/video_player.dart';
 
 /// Plays a video from a local [videoFile] or from a network [videoUri].
 class PlayerPage extends StatefulWidget {
-  const PlayerPage({super.key, this.videoFile, this.videoUri})
+  const PlayerPage({super.key, this.videoFile, this.videoUri, this.videoTitle})
       : assert(
           videoFile != null || videoUri != null,
           'Either videoFile or videoUri must be provided.',
@@ -17,6 +17,7 @@ class PlayerPage extends StatefulWidget {
 
   final File? videoFile;
   final Uri? videoUri;
+  final String? videoTitle;
 
   @override
   State<PlayerPage> createState() => _PlayerPageState();
@@ -38,8 +39,8 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     SystemChrome.setPreferredOrientations(const [
-      DeviceOrientation.landscapeRight,
-      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
     ]);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     _controller = widget.videoFile != null
@@ -115,11 +116,15 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
 
   /// Name shown in the watch history: the file name or the url.
   String get _title {
+    if (widget.videoTitle != null) return widget.videoTitle!;
+
     final file = widget.videoFile;
     if (file != null) {
       final path = file.path;
       final index = path.lastIndexOf(RegExp(r'[/\\]'));
-      if (index >= 0 && index < path.length - 1) return path.substring(index + 1);
+      if (index >= 0 && index < path.length - 1) {
+        return path.substring(index + 1);
+      }
       return path;
     }
     return widget.videoUri.toString();
@@ -543,7 +548,8 @@ class _VideoLayersState extends State<_VideoLayers> {
                       ),
                       child: Icon(
                         Icons.pause_rounded,
-                        color: Colors.white.withValues(alpha: _showOverlay ? 1 : .2),
+                        color: Colors.white
+                            .withValues(alpha: _showOverlay ? 1 : .2),
                       ),
                     ),
                   );

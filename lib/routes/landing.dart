@@ -19,6 +19,7 @@ class LandingPage extends StatefulWidget {
 
 class _LandingPageState extends State<LandingPage> {
   final TextEditingController _urlController = TextEditingController();
+  final TextEditingController _titleController = TextEditingController();
 
   bool _inputError = false;
 
@@ -41,6 +42,7 @@ class _LandingPageState extends State<LandingPage> {
   @override
   void dispose() {
     _urlController.dispose();
+    _titleController.dispose();
     super.dispose();
   }
 
@@ -62,9 +64,15 @@ class _LandingPageState extends State<LandingPage> {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => PlayerPage(videoUri: uri),
+        builder: (_) => PlayerPage(
+          videoUri: uri,
+          videoTitle: _titleController.text,
+        ),
       ),
     );
+
+    _titleController.clear();
+    _urlController.clear();
   }
 
   /// Parses [raw] into a playable uri, or returns `null` when unsupported.
@@ -123,11 +131,25 @@ class _LandingPageState extends State<LandingPage> {
                   mainAxisAlignment: MainAxisAlignment.center,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    const Text('Video url'),
+                    const Text('Play Network Video'),
                     const SizedBox(
                       height: 5,
                     ),
+                    TextField(
+                      controller: _titleController,
+                      keyboardType: TextInputType.name,
+                      textInputAction: TextInputAction.next,
+                      decoration: InputDecoration(
+                        hintText: 'Video Title (Optional)',
+                        border: const OutlineInputBorder(),
+                        focusedBorder: const OutlineInputBorder(),
+                      ),
+                    ),
+                    SizedBox(
+                      height: 6,
+                    ),
                     Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
                         Expanded(
                           child: TextField(
