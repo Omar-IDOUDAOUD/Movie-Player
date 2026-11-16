@@ -5,6 +5,7 @@ import 'dart:convert';
 
 import 'package:dir_picker/dir_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -435,6 +436,146 @@ void main() {
     await tester.pump();
 
     expect(find.text('Could not read this web page'), findsOneWidget);
+
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+  });
+
+  // ------------------------------------------------------ shared into app
+
+  /// Simulates Android sending a shared link over the platform channel.
+  Future<void> shareLink(WidgetTester tester, String link) async {
+    await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+      'movie_player/shared_link',
+      const StandardMethodCodec().encodeMethodCall(
+        MethodCall('onSharedLink', link),
+      ),
+      (_) {},
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+  }
+
+  test('shared links are recognised from browser text', () {
+    expect(
+      parseSharedLink('https://cdn.example.com/v.mp4')?.toString(),
+      'https://cdn.example.com/v.mp4',
+    );
+    // A sentence around the link: the first url wins, without punctuation.
+    expect(
+      parseSharedLink('Watch https://cdn.example.com/v.mp4 !')?.toString(),
+      'https://cdn.example.com/v.mp4',
+    );
+    // A shared host without a scheme still counts.
+    expect(
+      parseSharedLink('example.com/v.mp4')?.toString(),
+      'https://example.com/v.mp4',
+    );
+    // Local videos opened from a file manager.
+    expect(
+      parseSharedLink('content://media/external/video/media/7')?.scheme,
+      'content',
+    );
+    expect(parseSharedLink('just some words'), isNull);
+    expect(parseSharedLink(''), isNull);
+  });
+
+  test('the link type decides between playing and scanning', () {
+    expect(isDirectVideoLink(Uri.parse('https://a.com/v.mp4')), isTrue);
+    expect(isDirectVideoLink(Uri.parse('https://a.com/v.mp4?x=1')), isTrue);
+    expect(isDirectVideoLink(Uri.parse('content://media/video/1')), isTrue);
+    expect(isDirectVideoLink(Uri.parse('https://a.com/episode/1')), isFalse);
+  });
+
+  testWidgets('a shared video link opens the player',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(const MoviePlayer());
+    await tester.pumpAndSettle();
+
+    await shareLink(tester, 'https://cdn.example.com/movie.mp4');
+
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.byType(PlayerPage), findsOneWidget);
+  });
+
+  testWidgets('a shared web page link lands on the landing page and scans it',
+      (WidgetTester tester) async {
+    var scans = 0;
+    await tester.pumpWidget(
+      MoviePlayer(
+        findVideos: (page) async {
+          scans++;
+          return const [];
+        },
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await shareLink(tester, 'https://example.com/episode/1');
+
+    expect(scans, 1);
+    expect(find.text('https://example.com/episode/1'), findsOneWidget);
+
+    // Let the snackbar from the (stubbed) scan dismiss itself.
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('a web page link shared into the landing page scans it at once',
+      (WidgetTester tester) async {
+    var scans = 0;
+    final scanned = <Uri>[];
+    SharedPreferences.setMockInitialValues({});
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: LandingPage(
+          onToggleTheme: () {},
+          sharedPage: (url: 'https://example.com/ep/1', token: 1),
+          findVideos: (page) async {
+            scans++;
+            scanned.add(page);
+            return const [];
+          },
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(scans, 1);
+    expect(scanned.single.toString(), 'https://example.com/ep/1');
+    expect(find.text('https://example.com/ep/1'), findsOneWidget);
+
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('a link shared while running starts a new scan',
+      (WidgetTester tester) async {
+    var scans = 0;
+    SharedPreferences.setMockInitialValues({});
+
+    Widget build(({String url, int token})? shared) => MaterialApp(
+          home: LandingPage(
+            onToggleTheme: () {},
+            sharedPage: shared,
+            findVideos: (page) async {
+              scans++;
+              return const [];
+            },
+          ),
+        );
+
+    await tester.pumpWidget(build(null));
+    expect(scans, 0);
+
+    await tester.pumpWidget(build((url: 'https://example.com/ep/2', token: 7)));
+    await tester.pump();
+    await tester.pump();
+
+    expect(scans, 1);
+    expect(find.text('https://example.com/ep/2'), findsOneWidget);
 
     await tester.pump(const Duration(seconds: 5));
     await tester.pumpAndSettle();

@@ -12,6 +12,7 @@ class LandingPage extends StatefulWidget {
     super.key,
     required this.onToggleTheme,
     this.findVideos,
+    this.sharedPage,
   });
 
   final VoidCallback onToggleTheme;
@@ -20,6 +21,10 @@ class LandingPage extends StatefulWidget {
   /// scraping and invisible WebView). Defaults to [webview.findAllVideosOnPage];
   /// tests inject a stub so no network is used.
   final Future<List<Uri>> Function(Uri page)? findVideos;
+
+  /// A web page shared into the app: its extractor starts as soon as the
+  /// link arrives (a fresh token also makes a repeated share rescan).
+  final ({String url, int token})? sharedPage;
 
   @override
   State<LandingPage> createState() => _LandingPageState();
@@ -50,6 +55,27 @@ class _LandingPageState extends State<LandingPage> {
   void initState() {
     super.initState();
     _loadSavedFolders();
+    final shared = widget.sharedPage;
+    if (shared != null) {
+      // A link can be handed over before the first frame: scan once built.
+      WidgetsBinding.instance.addPostFrameCallback((_) => _scanSharedPage(shared));
+    }
+  }
+
+  @override
+  void didUpdateWidget(LandingPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final shared = widget.sharedPage;
+    if (shared != null && shared.token != oldWidget.sharedPage?.token) {
+      _scanSharedPage(shared);
+    }
+  }
+
+  /// Fills the web page field with a shared link and scans it at once.
+  void _scanSharedPage(({String url, int token}) shared) {
+    if (!mounted) return;
+    _pageUrlController.text = shared.url;
+    _scanWebPage();
   }
 
   @override
@@ -110,6 +136,10 @@ class _LandingPageState extends State<LandingPage> {
   /// Scans the web page the user entered for playable video urls:
   /// one result plays directly, many results open a choice list.
   Future<void> _scanWebPage() {
+    // One scan at a time: a share arriving while scanning keeps the
+    // running scan instead of racing it.
+    if (_scanning) return Future.value();
+
     final page = _parsePageUri(_pageUrlController.text);
     if (page == null) {
       setState(() => _pageInputError = true);
