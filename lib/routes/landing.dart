@@ -4,14 +4,20 @@ import 'package:movie_player/routes/history.dart';
 import 'package:movie_player/routes/local_videos_repo.dart';
 import 'package:movie_player/routes/player.dart';
 import 'package:movie_player/routes/selected_folder_videos.dart';
+import 'package:movie_player/routes/web_video.dart' as web;
 
 class LandingPage extends StatefulWidget {
   const LandingPage({
     super.key,
     required this.onToggleTheme,
+    this.findVideos,
   });
 
   final VoidCallback onToggleTheme;
+
+  /// Scans a web page for videos. Defaults to [web.findVideosOnPage];
+  /// tests inject a stub so no network is used.
+  final Future<List<Uri>> Function(Uri page)? findVideos;
 
   @override
   State<LandingPage> createState() => _LandingPageState();
@@ -20,8 +26,13 @@ class LandingPage extends StatefulWidget {
 class _LandingPageState extends State<LandingPage> {
   final TextEditingController _urlController = TextEditingController();
   final TextEditingController _titleController = TextEditingController();
+  final TextEditingController _pageUrlController = TextEditingController();
 
   bool _inputError = false;
+  bool _pageInputError = false;
+
+  /// True while a web page is being scanned for videos.
+  bool _scanning = false;
 
   /// True while the folder picker is open, so the button can't be tapped
   /// twice (`DirPicker` rejects a second pick).
@@ -43,6 +54,7 @@ class _LandingPageState extends State<LandingPage> {
   void dispose() {
     _urlController.dispose();
     _titleController.dispose();
+    _pageUrlController.dispose();
     super.dispose();
   }
 
@@ -91,6 +103,106 @@ class _LandingPageState extends State<LandingPage> {
     // A percent sign in the host means the input was mangled while parsing.
     if (uri.host.contains('%')) return null;
     return uri;
+  }
+
+  /// Scans the web page the user entered for playable video urls:
+  /// one result plays directly, many results open a choice list.
+  Future<void> _scanWebPage() {
+    final page = _parsePageUri(_pageUrlController.text);
+    if (page == null) {
+      setState(() => _pageInputError = true);
+      return Future.value();
+    }
+
+    setState(() {
+      _pageInputError = false;
+      _scanning = true;
+    });
+    return _findVideos(page);
+  }
+
+  Future<void> _findVideos(Uri page) async {
+    try {
+      final scan = widget.findVideos ?? web.findVideosOnPage;
+      final videos = await scan(page);
+      if (!mounted) return;
+      setState(() => _scanning = false);
+
+      if (videos.isEmpty) {
+        _showMessage('No video found on this page');
+      } else if (videos.length == 1) {
+        _openVideo(videos.first);
+      } else {
+        await _chooseVideo(videos);
+      }
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _scanning = false);
+      _showMessage('Could not read this web page');
+    }
+  }
+
+  /// Parses [raw] as the web page to scan. Only http(s) pages can be read.
+  Uri? _parsePageUri(String raw) {
+    var text = raw.trim();
+    if (text.isEmpty || RegExp(r'\s').hasMatch(text)) return null;
+    if (!text.contains('://')) text = 'https://$text';
+
+    final uri = Uri.tryParse(text);
+    if (uri == null || uri.host.isEmpty) return null;
+    if (uri.host.contains('%')) return null;
+    return uri.scheme == 'http' || uri.scheme == 'https' ? uri : null;
+  }
+
+  /// Lets the user pick one of the videos found on the page.
+  Future<void> _chooseVideo(List<Uri> videos) async {
+    final selected = await showDialog<Uri>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Select a video'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (final video in videos)
+                TextButton(
+                  onPressed: () => Navigator.pop(context, video),
+                  child: Text(
+                    video.toString(),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.left,
+                  ),
+                ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
+    if (selected == null || !mounted) return;
+    _openVideo(selected);
+  }
+
+  void _openVideo(Uri video) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PlayerPage(videoUri: video, videoTitle: ''),
+      ),
+    );
+  }
+
+  void _showMessage(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
   }
 
   @override
@@ -177,6 +289,54 @@ class _LandingPageState extends State<LandingPage> {
                           icon: const Icon(Icons.play_arrow_rounded),
                           tooltip: 'Play',
                         ),
+                      ],
+                    ),
+                    const SizedBox(
+                      height: 15,
+                    ),
+                    const Text('Play Video from a web page url'),
+                    const SizedBox(
+                      height: 5,
+                    ),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _pageUrlController,
+                            keyboardType: TextInputType.url,
+                            textInputAction: TextInputAction.go,
+                            onChanged: (_) {
+                              if (_pageInputError) {
+                                setState(() => _pageInputError = false);
+                              }
+                            },
+                            onSubmitted: (_) => _scanWebPage(),
+                            decoration: InputDecoration(
+                              hintText: 'Web page url',
+                              errorText: _pageInputError
+                                  ? 'Enter a valid web page url'
+                                  : null,
+                              border: const OutlineInputBorder(),
+                              focusedBorder: const OutlineInputBorder(),
+                            ),
+                          ),
+                        ),
+                        if (_scanning)
+                          const Padding(
+                            padding: EdgeInsets.all(12),
+                            child: SizedBox(
+                              width: 24,
+                              height: 24,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          )
+                        else
+                          IconButton(
+                            onPressed: _scanWebPage,
+                            icon: const Icon(Icons.search),
+                            tooltip: 'Scan page for videos',
+                          ),
                       ],
                     ),
                     const SizedBox(
