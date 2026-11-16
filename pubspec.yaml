@@ -60,15 +60,34 @@ dev_dependencies:
 
 flutter_launcher_icons:
   android: true
-  ios: false
+  ios: true
   image_path: "movie-player.jpg"
+  adaptive_icon_background: "#4C00FF"
+  adaptive_icon_foreground: "movie-player-tr.png"
+  adaptive_icon_foreground_inset: 16
+  adaptive_icon_monochrome: "movie-player-tr.png"
+  remove_alpha_ios: true
+  background_color_ios: "#4C00FF"
+  web:
+    generate: true
+    background_color: "#4C00FF"
+    theme_color: "#4C00FF"
 
 flutter_native_splash:
-  color: "#121212"
-  image: "movie-player.jpg"
+  color: "#4C00FF"
+  image: "movie-player-tr.png"
   android: true
-  ios: false
-  web: false
+  ios: true
+  web: true
+  android_gravity: center 
+  ios_content_mode: center
+  web_image_mode: contain 
+  android_12:
+    color: "#4C00FF"
+    color_dark: "#4C00FF"
+    image: movie-player-tr.png    
+    icon_background_color: "#4C00FF"
+    icon_background_color_dark: "#4C00FF"
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
