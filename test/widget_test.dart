@@ -10,11 +10,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:movie_player/main.dart';
-import 'package:movie_player/routes/landing.dart';
-import 'package:movie_player/routes/local_videos_repo.dart';
-import 'package:movie_player/routes/player.dart';
-import 'package:movie_player/routes/selected_folder_videos.dart';
-import 'package:movie_player/routes/watch_history.dart';
+import 'package:movie_player/pages/home/home_page.dart';
+import 'package:movie_player/folder_repo.dart';
+import 'package:movie_player/pages/player/player_page.dart';
+import 'package:movie_player/pages/folder_videos/folder_videos_page.dart';
+import 'package:movie_player/link_parser.dart';
+import 'package:movie_player/watch_history.dart';
 
 void main() {
   /// A single playable entry of a picked folder.
@@ -53,8 +54,17 @@ void main() {
     // The first tab is the folder one.
     expect(find.text('Play videos from folder'), findsOneWidget);
     expect(find.text('Select a Folder'), findsOneWidget);
-    // The other tabs are not built while hidden.
-    expect(find.byType(TextField), findsNothing);
+    // All tabs stay built (IndexedStack): title, video url and page url.
+    // Hidden tabs are offstage, so these look past the offstage nodes.
+    expect(find.byType(TextField, skipOffstage: false), findsNWidgets(3));
+    expect(
+      find.text('Play Network Video', skipOffstage: false),
+      findsOneWidget,
+    );
+    expect(
+      find.text('Play Video from a web page url', skipOffstage: false),
+      findsOneWidget,
+    );
     // Nothing was saved yet, so the section stays hidden.
     expect(find.text('Picked folders'), findsNothing);
     // History lives in its own tab now, not in the app bar.
@@ -67,11 +77,13 @@ void main() {
     await tester.pump();
   }
 
-  /// On the Network tab: the title field first, the video url second.
-  Finder videoUrlField() => find.byType(TextField).at(1);
-
-  /// The Web page tab only has the page url field.
-  Finder pageUrlField() => find.byType(TextField);
+  /// The landing page inputs in order: title, video url (Network tab),
+  /// page url (Web page tab). Hidden tabs are offstage, so the indices
+  /// are taken across all of them.
+  Finder videoUrlField() =>
+      find.byType(TextField, skipOffstage: false).at(1);
+  Finder pageUrlField() =>
+      find.byType(TextField, skipOffstage: false).at(2);
 
   testWidgets('empty url shows an error instead of opening the player',
       (WidgetTester tester) async {
@@ -340,9 +352,12 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     await tester.pumpWidget(
       MaterialApp(
-        home: LandingPage(onToggleTheme: () {}, findVideos: scan),
+        home: LandingPage.HomePage(onToggleTheme: () {}, findVideos: scan),
       ),
     );
+    // Let the always-built history tab finish loading its list, so its
+    // loading spinner doesn't count in later expectations.
+    await tester.pumpAndSettle();
     await openTab(tester, 'Web page');
   }
 
@@ -548,7 +563,7 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
-        home: LandingPage(
+        home: LandingPage.HomePage(
           onToggleTheme: () {},
           sharedPage: (url: 'https://example.com/ep/1', token: 1),
           findVideos: (page) async {
@@ -576,7 +591,7 @@ void main() {
     SharedPreferences.setMockInitialValues({});
 
     Widget build(({String url, int token})? shared) => MaterialApp(
-          home: LandingPage(
+          home: LandingPage.HomePage(
             onToggleTheme: () {},
             sharedPage: shared,
             findVideos: (page) async {

@@ -3,7 +3,7 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:movie_player/routes/web_video_extractor_1.dart';
+import 'package:movie_player/html_video_scraper.dart';
 
 Future<void> main(List<String> args) async {
   final page = Uri.parse(

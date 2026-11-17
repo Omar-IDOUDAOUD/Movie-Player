@@ -4,7 +4,7 @@ import 'dart:typed_data';
 import 'package:dir_picker/dir_picker.dart';
 import 'package:fc_native_video_thumbnail/fc_native_video_thumbnail.dart';
 import 'package:flutter/material.dart';
-import 'package:movie_player/routes/player.dart';
+import 'package:movie_player/pages/player/player_page.dart';
 
 /// Lists the video files of a folder picked with `dir_picker`.
 ///

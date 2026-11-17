@@ -4,9 +4,9 @@ import 'dart:io';
 
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
-import 'package:movie_player/routes/web_video_extractor_1.dart';
+import 'package:movie_player/html_video_scraper.dart';
 
-/// Second video extraction mechanism, based on an invisible WebView.
+/// Video extraction with an invisible WebView.
 ///
 /// Where [findVideosOnPage] only downloads html and follows iframes, this
 /// runs the page's own javascript in a headless Android WebView and watches
