@@ -196,7 +196,11 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
             return const Center(
               child: SizedBox.square(
                 dimension: 35,
-                child: CircularProgressIndicator(),
+                child: CircularProgressIndicator(
+                  color: Colors.grey,
+                  strokeCap: StrokeCap.round,
+                  strokeWidth: 5,
+                ),
               ),
             );
           }
@@ -289,6 +293,33 @@ class _VideoLayersState extends State<_VideoLayers> {
   late final ValueNotifier<bool> _loading;
   late final ValueNotifier<bool> _playPause;
 
+  /// Gesture mode: classic "movie mode" (tap zones) or "normal mode"
+  /// (tap toggles the controls, a centered button plays/pauses).
+  /// Chosen per video: every video starts in movie mode.
+  bool _movieMode = true;
+
+  /// Video zoom (1 = fitted) and pan offset, adjusted by pinch and drag.
+  double _zoom = 1;
+  Offset _pan = Offset.zero;
+
+  /// Pointers currently down, used to track pinch-to-zoom and panning.
+  final Map<int, Offset> _activePointers = {};
+
+  /// Distance and zoom captured when a pinch started, its basis.
+  double _pinchStartSpan = 0;
+  double _pinchStartZoom = 1;
+
+  /// Whether the current touch has panned a zoomed video, so a pan can
+  /// undo the pause done by movie mode's hold-to-pause zone.
+  bool _panMoved = false;
+
+  /// True between movie mode's hold-to-pause down and its release.
+  bool _holdPause = false;
+
+  /// True while a long press (2x) hold is running, so the speed is only
+  /// restored once even if up and cancel both fire.
+  bool _holdingSpeed = false;
+
   @override
   void initState() {
     super.initState();
@@ -366,6 +397,8 @@ class _VideoLayersState extends State<_VideoLayers> {
   }
 
   Future<void> _startSpeedHold() async {
+    if (_holdingSpeed) return;
+    _holdingSpeed = true;
     _speedBeforeHold = _controller.value.playbackSpeed;
     await _controller.setPlaybackSpeed(2);
     if (mounted) setState(() {});
@@ -386,8 +419,104 @@ class _VideoLayersState extends State<_VideoLayers> {
   }
 
   Future<void> _endSpeedHold() async {
+    if (!_holdingSpeed) return;
+    _holdingSpeed = false;
     await _controller.setPlaybackSpeed(_speedBeforeHold);
     if (mounted) setState(() {});
+  }
+
+  /// Shows the controls when they are hidden and the other way round.
+  void _toggleOverlay() {
+    setState(() => _showOverlay = !_showOverlay);
+  }
+
+  /// Switches between movie mode and normal mode (per video only).
+  void _switchMode() {
+    setState(() => _movieMode = !_movieMode);
+  }
+
+  /// Two fingers are down: remember the distance and zoom to compare with.
+  void _startPinch() {
+    final points = _activePointers.values.take(2).toList();
+    if (points.length < 2) return;
+    _pinchStartSpan = (points[0] - points[1]).distance;
+    _pinchStartZoom = _zoom;
+  }
+
+  void _onPointerDown(PointerDownEvent event) {
+    if (_activePointers.isEmpty) _panMoved = false;
+    _activePointers[event.pointer] = event.position;
+    if (_activePointers.length >= 2) _startPinch();
+  }
+
+  void _onPointerMove(PointerMoveEvent event) {
+    final previous = _activePointers[event.pointer];
+    if (previous == null) return;
+    _activePointers[event.pointer] = event.position;
+
+    if (_activePointers.length >= 2) {
+      // Pinch: scale the video between 1x (fitted) and 4x.
+      if (_pinchStartSpan <= 0) return;
+      final points = _activePointers.values.take(2).toList();
+      if (points.length < 2) return;
+      final span = (points[0] - points[1]).distance;
+      setState(() {
+        _zoom = min(max(_pinchStartZoom * span / _pinchStartSpan, 1.0), 4.0);
+        _pan = _clampPan(_pan);
+      });
+      return;
+    }
+
+    // One finger: move around a zoomed video. Skipped while the controls
+    // are shown so the timeline drag keeps working untouched.
+    if (_zoom > 1 && !_showOverlay) {
+      _panMoved = true;
+      setState(() => _pan = _clampPan(_pan + (event.position - previous)));
+    }
+  }
+
+  void _onPointerEnd(PointerEvent event) {
+    final resumeAfterPan = _holdPause && _panMoved;
+    _activePointers.remove(event.pointer);
+    if (_activePointers.length >= 2) {
+      // Take the remaining fingers as the new pinch basis.
+      _startPinch();
+    } else {
+      _pinchStartSpan = 0;
+    }
+    if (resumeAfterPan) {
+      // Dragging cancels the hold-to-pause tap, so onTapUp never fires.
+      // Resume instead of leaving the video stuck on pause.
+      _holdPause = false;
+      _play();
+    }
+  }
+
+  /// Keeps [pan] within the area a zoomed video can still cover, based on
+  /// the letterboxed size of the video on the current screen.
+  Offset _clampPan(Offset pan) {
+    final screen = MediaQuery.sizeOf(context);
+    if (screen.height <= 0) return Offset.zero;
+
+    final aspect = _controller.value.aspectRatio;
+    final videoAspect = aspect > 0 ? aspect : screen.width / screen.height;
+    final screenAspect = screen.width / screen.height;
+
+    final double fitWidth, fitHeight;
+    if (videoAspect >= screenAspect) {
+      fitWidth = screen.width;
+      fitHeight = screen.width / videoAspect;
+    } else {
+      fitHeight = screen.height;
+      fitWidth = screen.height * videoAspect;
+    }
+
+    final overX = max(0.0, (fitWidth * _zoom - screen.width) / 2);
+    final overY = max(0.0, (fitHeight * _zoom - screen.height) / 2);
+    return Offset(
+      min(max(pan.dx, -overX), overX),
+      min(max(pan.dy, -overY), overY),
+    );
   }
 
   Future<void> _seekBy(Duration delta) async {
@@ -453,6 +582,10 @@ class _VideoLayersState extends State<_VideoLayers> {
     return '${speed == rounded ? rounded.toInt() : speed}x';
   }
 
+  /// How far the controls are lifted above their movie mode place, so the
+  /// timeline sits a little higher in normal mode.
+  double get _controlsLift => _movieMode ? 0 : 40;
+
   KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
 
@@ -481,228 +614,317 @@ class _VideoLayersState extends State<_VideoLayers> {
     return Focus(
       autofocus: true,
       onKeyEvent: _handleKeyEvent,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          Center(
-            child: AspectRatio(
-              aspectRatio: _controller.value.aspectRatio,
-              child: VideoPlayer(_controller),
-            ),
-          ),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Expanded(
-                flex: 3,
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Expanded(
-                      child: GestureDetector(
-                        onDoubleTap: () => _seekBy(const Duration(seconds: -5)),
-                        onTap: _pausePlay,
-                        child: const ColoredBox(color: Colors.transparent),
-                      ),
-                    ),
-                    Expanded(
-                      child: GestureDetector(
-                        onDoubleTap: () => _seekBy(const Duration(seconds: 5)),
-                        onTap: _pausePlay,
-                        onLongPressStart: (_) => _startSpeedHold(),
-                        onLongPressUp: _endSpeedHold,
-                        onLongPressCancel: _endSpeedHold,
-                        child: const ColoredBox(color: Colors.transparent),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Expanded(
-                flex: 4,
-                child: GestureDetector(
-                  onTapDown: (_) => _pause(),
-                  onTapUp: (_) => _play(),
-                  child: const ColoredBox(color: Colors.transparent),
-                ),
-              ),
-            ],
-          ),
-          Positioned(
-            top: 16,
-            right: 10,
-            child: ValueListenableBuilder(
-                valueListenable: _playPause,
-                builder: (context, value, child) {
-                  return AnimatedOpacity(
-                    opacity: !value ? 1 : 0,
-                    curve: Curves.linearToEaseOut,
-                    duration: Duration(
-                      milliseconds: 200,
-                    ),
-                    child: AnimatedScale(
-                      scale: !value ? 1 : 0,
-                      curve: Curves.linearToEaseOut,
-                      duration: Duration(
-                        milliseconds: 200,
-                      ),
-                      child: Icon(
-                        Icons.pause_rounded,
-                        color: Colors.white
-                            .withValues(alpha: _showOverlay ? 1 : .2),
-                      ),
-                    ),
-                  );
-                }),
-          ),
-          if (_showOverlay) ...[
-            Positioned(
-              top: 4,
-              left: 4,
-              child: IconButton(
-                onPressed: () => Navigator.maybePop(context),
-                icon: const Icon(Icons.close, color: Colors.white),
-                tooltip: 'Close player',
-              ),
-            ),
-            ValueListenableBuilder<double?>(
-              valueListenable: _timelineDragHandlerOffset,
-              builder: (context, dx, _) {
-                return Positioned(
-                  bottom: _timeLineVerPadding + 5,
-                  left: _timeLineHorPadding,
-                  right: _timeLineHorPadding,
-                  height: 30,
-                  child: GestureDetector(
-                    onPanDown: (dets) {
-                      _timelineDragHandlerOffset.value = dets.localPosition.dx;
-                    },
-                    onPanUpdate: (dets) {
-                      _timelineDragHandlerOffset.value = max(
-                        0,
-                        min(dets.localPosition.dx, _timeLineWidth),
-                      );
-                    },
-                    onPanEnd: (_) => _endTimelineDrag(),
-                    onPanCancel: _endTimelineDrag,
-                    child: ColoredBox(
-                      color: Colors.transparent,
-                      child: dx == null
-                          ? const SizedBox.shrink()
-                          : Align(
-                              alignment: Alignment.centerLeft,
-                              child: SizedBox(
-                                width: dx,
-                                height: 30,
-                                child: DecoratedBox(
-                                  decoration: BoxDecoration(
-                                    gradient: LinearGradient(
-                                      begin: AlignmentGeometry.bottomCenter,
-                                      end: AlignmentGeometry.topCenter,
-                                      colors: [
-                                        Colors.white,
-                                        Colors.white.withValues(alpha: 0),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ),
-                    ),
+      child: Listener(
+        // Raw pointer tracking for pinch-to-zoom and panning: raw events
+        // never join the gesture arena, so every tap, double tap, long
+        // press and timeline drag below behaves exactly as before.
+        onPointerDown: _onPointerDown,
+        onPointerMove: _onPointerMove,
+        onPointerUp: _onPointerEnd,
+        onPointerCancel: _onPointerEnd,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            Transform.translate(
+              // The clamp also resets the pan when the video is back at 1x.
+              offset: _clampPan(_pan),
+              child: Transform.scale(
+                scale: _zoom,
+                filterQuality: FilterQuality.medium,
+                child: Center(
+                  child: AspectRatio(
+                    aspectRatio: _controller.value.aspectRatio,
+                    child: VideoPlayer(_controller),
                   ),
-                );
-              },
-            ),
-            Padding(
-              padding: EdgeInsets.symmetric(
-                horizontal: _timeLineHorPadding,
-                vertical: _timeLineVerPadding,
+                ),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisAlignment: MainAxisAlignment.end,
+            ),
+            if (_movieMode)
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Row(
-                    children: [
-                      Text(
-                        '${_formatDuration(_controller.value.position)} / '
-                        '${_formatDuration(_controller.value.duration)}',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 13,
-                          shadows: [
-                            BoxShadow(
-                              color: Colors.black,
-                              offset: Offset.zero,
-                              spreadRadius: 2,
-                              blurRadius: 2,
-                            ),
-                          ],
-                        ),
-                      ),
-                      const Spacer(),
-                      IconButton(
-                        onPressed: _toggleOrientation,
-                        icon: const Icon(
-                          Icons.screen_rotation,
-                          color: Colors.white,
-                        ),
-                        tooltip: isPortrait
-                            ? 'Switch to landscape'
-                            : 'Switch to portrait',
-                      ),
-                      IconButton(
-                        onPressed: _cycleSpeed,
-                        icon: Text(
-                          _speedLabel,
-                          style: const TextStyle(color: Colors.white),
-                        ),
-                        tooltip: 'Playback speed',
-                      ),
-                    ],
-                  ),
-                  SizedBox(
-                    height: 5,
-                    child: Stack(
-                      key: _timeLineKey,
-                      fit: StackFit.expand,
+                  Expanded(
+                    flex: 3,
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        ColoredBox(
-                          color: Colors.white.withValues(alpha: 0.3),
+                        Expanded(
+                          child: GestureDetector(
+                            onDoubleTap: () =>
+                                _seekBy(const Duration(seconds: -5)),
+                            onTap: _pausePlay,
+                            child: const ColoredBox(color: Colors.transparent),
+                          ),
                         ),
-                        FractionallySizedBox(
-                          widthFactor: _progress,
-                          alignment: Alignment.centerLeft,
-                          child: const ColoredBox(
-                            color: Colors.white,
+                        Expanded(
+                          child: GestureDetector(
+                            onDoubleTap: () =>
+                                _seekBy(const Duration(seconds: 5)),
+                            onTap: _pausePlay,
+                            onLongPressStart: (_) => _startSpeedHold(),
+                            onLongPressUp: _endSpeedHold,
+                            onLongPressCancel: _endSpeedHold,
+                            child: const ColoredBox(color: Colors.transparent),
                           ),
                         ),
                       ],
                     ),
                   ),
-                ],
-              ),
-            ),
-          ],
-          ValueListenableBuilder<bool>(
-            valueListenable: _loading,
-            builder: (context, loading, _) {
-              if (loading) {
-                return const Center(
-                  child: SizedBox.square(
-                    dimension: 35,
-                    child: CircularProgressIndicator(
-                      color: Colors.white,
-                      strokeCap: StrokeCap.round,
-                      strokeWidth: 5,
+                  Expanded(
+                    flex: 4,
+                    child: GestureDetector(
+                      onTapDown: (_) {
+                        _holdPause = true;
+                        _pause();
+                      },
+                      onTapUp: (_) {
+                        _holdPause = false;
+                        _play();
+                      },
+                      child: const ColoredBox(color: Colors.transparent),
                     ),
                   ),
-                );
-              }
-              return const SizedBox.shrink();
-            },
-          ),
-        ],
+                ],
+              )
+            else
+              // Normal mode: the seek and speed gestures stretch over the
+              // full screen height, a single tap anywhere toggles the
+              // controls instead of playing/pausing.
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(
+                    child: GestureDetector(
+                      onDoubleTap: () => _seekBy(const Duration(seconds: -5)),
+                      onTap: _toggleOverlay,
+                      child: const ColoredBox(color: Colors.transparent),
+                    ),
+                  ),
+                  Expanded(
+                    child: GestureDetector(
+                      onDoubleTap: () => _seekBy(const Duration(seconds: 5)),
+                      onTap: _toggleOverlay,
+                      onLongPressStart: (_) => _startSpeedHold(),
+                      onLongPressUp: _endSpeedHold,
+                      onLongPressCancel: _endSpeedHold,
+                      child: const ColoredBox(color: Colors.transparent),
+                    ),
+                  ),
+                ],
+              ),
+            Positioned(
+              top: 16,
+              right: 10,
+              child: ValueListenableBuilder(
+                  valueListenable: _playPause,
+                  builder: (context, value, child) {
+                    return AnimatedOpacity(
+                      opacity: !value ? 1 : 0,
+                      curve: Curves.linearToEaseOut,
+                      duration: Duration(
+                        milliseconds: 200,
+                      ),
+                      child: AnimatedScale(
+                        scale: !value ? 1 : 0,
+                        curve: Curves.linearToEaseOut,
+                        duration: Duration(
+                          milliseconds: 200,
+                        ),
+                        child: Icon(
+                          Icons.pause_rounded,
+                          color: Colors.white
+                              .withValues(alpha: _showOverlay ? 1 : .2),
+                        ),
+                      ),
+                    );
+                  }),
+            ),
+            if (_showOverlay) ...[
+              Positioned(
+                top: 4,
+                left: 4,
+                child: IconButton(
+                  onPressed: () => Navigator.maybePop(context),
+                  icon: const Icon(Icons.close, color: Colors.white),
+                  tooltip: 'Close player',
+                ),
+              ),
+              ValueListenableBuilder<double?>(
+                valueListenable: _timelineDragHandlerOffset,
+                builder: (context, dx, _) {
+                  return Positioned(
+                    bottom: _timeLineVerPadding + 5 + _controlsLift,
+                    left: _timeLineHorPadding,
+                    right: _timeLineHorPadding,
+                    height: 30,
+                    child: GestureDetector(
+                      onPanDown: (dets) {
+                        _timelineDragHandlerOffset.value =
+                            dets.localPosition.dx;
+                      },
+                      onPanUpdate: (dets) {
+                        _timelineDragHandlerOffset.value = max(
+                          0,
+                          min(dets.localPosition.dx, _timeLineWidth),
+                        );
+                      },
+                      onPanEnd: (_) => _endTimelineDrag(),
+                      onPanCancel: _endTimelineDrag,
+                      child: ColoredBox(
+                        color: Colors.transparent,
+                        child: dx == null
+                            ? const SizedBox.shrink()
+                            : Align(
+                                alignment: Alignment.centerLeft,
+                                child: SizedBox(
+                                  width: dx,
+                                  height: 30,
+                                  child: DecoratedBox(
+                                    decoration: BoxDecoration(
+                                      gradient: LinearGradient(
+                                        begin: AlignmentGeometry.bottomCenter,
+                                        end: AlignmentGeometry.topCenter,
+                                        colors: [
+                                          Colors.white,
+                                          Colors.white.withValues(alpha: 0),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+              Padding(
+                padding: EdgeInsets.fromLTRB(
+                  _timeLineHorPadding,
+                  _timeLineVerPadding,
+                  _timeLineHorPadding,
+                  _timeLineVerPadding + _controlsLift,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          '${_formatDuration(_controller.value.position)} / '
+                          '${_formatDuration(_controller.value.duration)}',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 13,
+                            shadows: [
+                              BoxShadow(
+                                color: Colors.black,
+                                offset: Offset.zero,
+                                spreadRadius: 2,
+                                blurRadius: 2,
+                              ),
+                            ],
+                          ),
+                        ),
+                        const Spacer(),
+                        IconButton(
+                          onPressed: _toggleOrientation,
+                          icon: const Icon(
+                            Icons.screen_rotation,
+                            color: Colors.white,
+                          ),
+                          tooltip: isPortrait
+                              ? 'Switch to landscape'
+                              : 'Switch to portrait',
+                        ),
+                        IconButton(
+                          onPressed: _switchMode,
+                          icon: Icon(
+                            _movieMode
+                                ? Icons.movie_outlined
+                                : Icons.touch_app_outlined,
+                            color: Colors.white,
+                          ),
+                          tooltip: _movieMode
+                              ? 'Switch to normal mode'
+                              : 'Switch to movie mode',
+                        ),
+                        IconButton(
+                          onPressed: _cycleSpeed,
+                          icon: Text(
+                            _speedLabel,
+                            style: const TextStyle(color: Colors.white),
+                          ),
+                          tooltip: 'Playback speed',
+                        ),
+                      ],
+                    ),
+                    SizedBox(
+                      height: 5,
+                      child: Stack(
+                        key: _timeLineKey,
+                        fit: StackFit.expand,
+                        children: [
+                          ColoredBox(
+                            color: Colors.white.withValues(alpha: 0.3),
+                          ),
+                          FractionallySizedBox(
+                            widthFactor: _progress,
+                            alignment: Alignment.centerLeft,
+                            child: const ColoredBox(
+                              color: Colors.white,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (!_movieMode)
+                Center(
+                  child: ValueListenableBuilder<bool>(
+                    valueListenable: _playPause,
+                    builder: (context, playing, child) {
+                      return IconButton(
+                        onPressed: _pausePlay,
+                        iconSize: 72,
+                        tooltip: playing ? 'Pause' : 'Play',
+                        icon: Icon(
+                          playing
+                              ? Icons.pause_rounded
+                              : Icons.play_arrow_rounded,
+                          color: Colors.white,
+                          shadows: const [
+                            Shadow(color: Colors.black54, blurRadius: 8),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                ),
+            ],
+            ValueListenableBuilder<bool>(
+              valueListenable: _loading,
+              builder: (context, loading, _) {
+                if (loading) {
+                  return const Center(
+                    child: SizedBox.square(
+                      dimension: 35,
+                      child: CircularProgressIndicator(
+                        color: Colors.white,
+                        strokeCap: StrokeCap.round,
+                        strokeWidth: 5,
+                      ),
+                    ),
+                  );
+                }
+                return const SizedBox.shrink();
+              },
+            ),
+          ],
+        ),
       ),
     );
   }
