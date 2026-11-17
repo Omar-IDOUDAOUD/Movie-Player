@@ -1,9 +1,13 @@
+import 'dart:io';
+import 'dart:typed_data';
+
 import 'package:dir_picker/dir_picker.dart';
+import 'package:fc_native_video_thumbnail/fc_native_video_thumbnail.dart';
 import 'package:flutter/material.dart';
-import 'package:movie_player/routes/history.dart';
 import 'package:movie_player/routes/local_videos_repo.dart';
 import 'package:movie_player/routes/player.dart';
 import 'package:movie_player/routes/selected_folder_videos.dart';
+import 'package:movie_player/routes/watch_history.dart';
 import 'package:movie_player/routes/web_video_extractor_1.dart';
 import 'package:movie_player/routes/web_video_extractor_2.dart' as webview;
 
@@ -18,8 +22,8 @@ class LandingPage extends StatefulWidget {
   final VoidCallback onToggleTheme;
 
   /// Scans a web page for videos with both extraction mechanisms (html
-  /// scraping and invisible WebView). Defaults to [webview.findAllVideosOnPage];
-  /// tests inject a stub so no network is used.
+  /// scraping and invisible WebView). Defaults to the combined scan of
+  /// both extractors; tests inject a stub so no network is used.
   final Future<List<Uri>> Function(Uri page)? findVideos;
 
   /// A web page shared into the app: its extractor starts as soon as the
@@ -31,9 +35,18 @@ class LandingPage extends StatefulWidget {
 }
 
 class _LandingPageState extends State<LandingPage> {
+  /// The tabs of the bottom navigation bar.
+  static const _folderTab = 0;
+  static const _networkTab = 1;
+  static const _webTab = 2;
+  static const _historyTab = 3;
+
   final TextEditingController _urlController = TextEditingController();
   final TextEditingController _titleController = TextEditingController();
   final TextEditingController _pageUrlController = TextEditingController();
+
+  /// Which tab is showing.
+  var _tabIndex = _folderTab;
 
   bool _inputError = false;
   bool _pageInputError = false;
@@ -75,6 +88,8 @@ class _LandingPageState extends State<LandingPage> {
   void _scanSharedPage(({String url, int token}) shared) {
     if (!mounted) return;
     _pageUrlController.text = shared.url;
+    // Show the web page tab so the scan and its results are visible.
+    setState(() => _tabIndex = _webTab);
     _scanWebPage();
   }
 
@@ -271,160 +286,198 @@ class _LandingPageState extends State<LandingPage> {
             ),
             tooltip: 'Toggle theme',
           ),
-          IconButton(
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const HistoryPage()),
-            ),
-            icon: const Icon(Icons.history),
-            tooltip: 'Watch history',
+        ],
+      ),
+      body: switch (_tabIndex) {
+        _networkTab => _scrollable(_networkTabChildren()),
+        _webTab => _scrollable(_webTabChildren()),
+        _historyTab => const _HistoryView(),
+        _ => _scrollable(_folderTabChildren()),
+      },
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _tabIndex,
+        onDestinationSelected: (index) => setState(() => _tabIndex = index),
+        destinations: const [
+          NavigationDestination(
+            icon: Icon(Icons.folder_open_outlined),
+            selectedIcon: Icon(Icons.folder_open),
+            label: 'Folder',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.play_circle_outline),
+            selectedIcon: Icon(Icons.play_circle_fill),
+            label: 'Network',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.language),
+            label: 'Web page',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.history),
+            label: 'History',
           ),
         ],
       ),
-      body: LayoutBuilder(
-        builder: (context, constraints) {
-          // Scrollable so the saved folder buttons never overflow the screen.
-          return SingleChildScrollView(
-            child: ConstrainedBox(
-              constraints: BoxConstraints(minHeight: constraints.maxHeight),
-              child: Padding(
-                padding: const EdgeInsets.all(25.0),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    const Text('Play Network Video'),
-                    const SizedBox(
-                      height: 5,
-                    ),
-                    TextField(
-                      controller: _titleController,
-                      keyboardType: TextInputType.name,
-                      textInputAction: TextInputAction.next,
-                      decoration: InputDecoration(
-                        hintText: 'Video Title (Optional)',
-                        border: const OutlineInputBorder(),
-                        focusedBorder: const OutlineInputBorder(),
-                      ),
-                    ),
-                    SizedBox(
-                      height: 6,
-                    ),
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller: _urlController,
-                            keyboardType: TextInputType.url,
-                            textInputAction: TextInputAction.go,
-                            onChanged: (_) {
-                              if (_inputError) {
-                                setState(() => _inputError = false);
-                              }
-                            },
-                            onSubmitted: (_) => _submit(),
-                            decoration: InputDecoration(
-                              hintText: 'Url',
-                              errorText: _inputError
-                                  ? 'Enter a valid video url'
-                                  : null,
-                              border: const OutlineInputBorder(),
-                              focusedBorder: const OutlineInputBorder(),
-                            ),
-                          ),
-                        ),
-                        IconButton(
-                          onPressed: _submit,
-                          icon: const Icon(Icons.play_arrow_rounded),
-                          tooltip: 'Play',
-                        ),
-                      ],
-                    ),
-                    const SizedBox(
-                      height: 15,
-                    ),
-                    const Text('Play Video from a web page url'),
-                    const SizedBox(
-                      height: 5,
-                    ),
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller: _pageUrlController,
-                            keyboardType: TextInputType.url,
-                            textInputAction: TextInputAction.go,
-                            onChanged: (_) {
-                              if (_pageInputError) {
-                                setState(() => _pageInputError = false);
-                              }
-                            },
-                            onSubmitted: (_) => _scanWebPage(),
-                            decoration: InputDecoration(
-                              hintText: 'Web page url',
-                              errorText: _pageInputError
-                                  ? 'Enter a valid web page url'
-                                  : null,
-                              border: const OutlineInputBorder(),
-                              focusedBorder: const OutlineInputBorder(),
-                            ),
-                          ),
-                        ),
-                        if (_scanning)
-                          const Padding(
-                            padding: EdgeInsets.all(12),
-                            child: SizedBox(
-                              width: 24,
-                              height: 24,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            ),
-                          )
-                        else
-                          IconButton(
-                            onPressed: _scanWebPage,
-                            icon: const Icon(Icons.search),
-                            tooltip: 'Scan page for videos',
-                          ),
-                      ],
-                    ),
-                    const SizedBox(
-                      height: 15,
-                    ),
-                    const Text('Play videos from folder'),
-                    FilledButton.icon(
-                      label: const Text('Select a Folder'),
-                      icon: const Icon(Icons.folder_open_rounded),
-                      onPressed: _picking ? null : _pickFolder,
-                    ),
-                    if (_savedFolders.isNotEmpty) ...[
-                      const SizedBox(height: 20),
-                      const Text('Picked folders'),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: [
-                          for (final folder in _savedFolders)
-                            OutlinedButton.icon(
-                              onPressed: _restoring
-                                  ? null
-                                  : () => _openSavedFolder(folder),
-                              icon: const Icon(Icons.folder_rounded),
-                              label: Text(folder.name),
-                            ),
-                        ],
-                      ),
-                    ],
-                  ],
-                ),
+    );
+  }
+
+  /// A tab's content: scrollable, vertically centered and stretched.
+  Widget _scrollable(List<Widget> children) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return SingleChildScrollView(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: constraints.maxHeight),
+            child: Padding(
+              padding: const EdgeInsets.all(25.0),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: children,
               ),
             ),
-          );
-        },
-      ),
+          ),
+        );
+      },
     );
+  }
+
+  /// The "Folder" tab: pick a folder and list the saved ones.
+  List<Widget> _folderTabChildren() {
+    return [
+      const Text('Play videos from folder'),
+      const SizedBox(
+        height: 5,
+      ),
+      FilledButton.icon(
+        label: const Text('Select a Folder'),
+        icon: const Icon(Icons.folder_open_rounded),
+        onPressed: _picking ? null : _pickFolder,
+      ),
+      if (_savedFolders.isNotEmpty) ...[
+        const SizedBox(height: 20),
+        const Text('Picked folders'),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final folder in _savedFolders)
+              OutlinedButton.icon(
+                onPressed: _restoring
+                    ? null
+                    : () => _openSavedFolder(folder),
+                icon: const Icon(Icons.folder_rounded),
+                label: Text(folder.name),
+              ),
+          ],
+        ),
+      ],
+    ];
+  }
+
+  /// The "Network" tab: play a video url directly.
+  List<Widget> _networkTabChildren() {
+    return [
+      const Text('Play Network Video'),
+      const SizedBox(
+        height: 5,
+      ),
+      TextField(
+        controller: _titleController,
+        keyboardType: TextInputType.name,
+        textInputAction: TextInputAction.next,
+        decoration: InputDecoration(
+          hintText: 'Video Title (Optional)',
+          border: const OutlineInputBorder(),
+          focusedBorder: const OutlineInputBorder(),
+        ),
+      ),
+      SizedBox(
+        height: 6,
+      ),
+      Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Expanded(
+            child: TextField(
+              controller: _urlController,
+              keyboardType: TextInputType.url,
+              textInputAction: TextInputAction.go,
+              onChanged: (_) {
+                if (_inputError) {
+                  setState(() => _inputError = false);
+                }
+              },
+              onSubmitted: (_) => _submit(),
+              decoration: InputDecoration(
+                hintText: 'Url',
+                errorText:
+                    _inputError ? 'Enter a valid video url' : null,
+                border: const OutlineInputBorder(),
+                focusedBorder: const OutlineInputBorder(),
+              ),
+            ),
+          ),
+          IconButton(
+            onPressed: _submit,
+            icon: const Icon(Icons.play_arrow_rounded),
+            tooltip: 'Play',
+          ),
+        ],
+      ),
+    ];
+  }
+
+  /// The "Web page" tab: scan a page for its videos.
+  List<Widget> _webTabChildren() {
+    return [
+      const Text('Play Video from a web page url'),
+      const SizedBox(
+        height: 5,
+      ),
+      Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Expanded(
+            child: TextField(
+              controller: _pageUrlController,
+              keyboardType: TextInputType.url,
+              textInputAction: TextInputAction.go,
+              onChanged: (_) {
+                if (_pageInputError) {
+                  setState(() => _pageInputError = false);
+                }
+              },
+              onSubmitted: (_) => _scanWebPage(),
+              decoration: InputDecoration(
+                hintText: 'Web page url',
+                errorText: _pageInputError
+                    ? 'Enter a valid web page url'
+                    : null,
+                border: const OutlineInputBorder(),
+                focusedBorder: const OutlineInputBorder(),
+              ),
+            ),
+          ),
+          if (_scanning)
+            const Padding(
+              padding: EdgeInsets.all(12),
+              child: SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            )
+          else
+            IconButton(
+              onPressed: _scanWebPage,
+              icon: const Icon(Icons.search),
+              tooltip: 'Scan page for videos',
+            ),
+        ],
+      ),
+    ];
   }
 
   /// Picks a folder and opens the page listing its video files.
@@ -540,5 +593,189 @@ class _LandingPageState extends State<LandingPage> {
       default:
         return error.message ?? 'Could not open the folder picker';
     }
+  }
+}
+
+/// The watch history list, shown in the landing page's "History" tab.
+///
+/// Every entry shows a thumbnail, the title (file name or url), the
+/// duration and how far the user got. Tapping one resumes it in the
+/// [PlayerPage].
+class _HistoryView extends StatefulWidget {
+  const _HistoryView();
+
+  @override
+  State<_HistoryView> createState() => _HistoryViewState();
+}
+
+class _HistoryViewState extends State<_HistoryView> {
+  static final _fcThumbnail = FcNativeVideoThumbnail();
+
+  late Future<List<WatchHistoryEntry>> _history;
+
+  /// One future per video, so a thumbnail is generated at most once.
+  final Map<String, Future<Uint8List?>> _thumbnailCache = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _history = WatchHistory.load();
+  }
+
+  /// Opens [entry] in the player and refreshes the list when coming back,
+  /// so the newest watch position is shown.
+  Future<void> _open(WatchHistoryEntry entry) async {
+    final uri = Uri.tryParse(entry.uri);
+    if (uri == null) return;
+
+    final Widget player;
+    if (uri.scheme == 'file') {
+      player = PlayerPage(videoFile: File.fromUri(uri));
+    } else {
+      player = PlayerPage(videoUri: uri);
+    }
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => player),
+    );
+    if (!mounted) return;
+    setState(() {
+      _history = WatchHistory.load();
+    });
+  }
+
+  /// Generates a thumbnail, or returns null when the platform can't.
+  Future<Uint8List?> _loadThumbnail(WatchHistoryEntry entry) async {
+    final uri = Uri.tryParse(entry.uri);
+    if (uri == null) return null;
+
+    final isFile = uri.scheme == 'file';
+    try {
+      return await _fcThumbnail.saveThumbnailToBytes(
+        srcFile: isFile ? uri.toFilePath() : entry.uri,
+        width: 168,
+        height: 120,
+        quality: 70,
+        srcFileUri: !isFile &&
+            uri.scheme != 'http' &&
+            uri.scheme != 'https',
+      );
+    } catch (_) {
+      // No thumbnail: the tile falls back to an icon.
+      return null;
+    }
+  }
+
+  Widget _thumbnail(WatchHistoryEntry entry) {
+    final future = _thumbnailCache.putIfAbsent(
+      entry.uri,
+      () => _loadThumbnail(entry),
+    );
+
+    return SizedBox(
+      width: 56,
+      height: 40,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(4),
+        child: FutureBuilder<Uint8List?>(
+          future: future,
+          builder: (context, snapshot) {
+            final data = snapshot.data;
+            if (data != null) {
+              return Image.memory(data, fit: BoxFit.cover);
+            }
+            return ColoredBox(
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              child: const Icon(Icons.video_file_outlined, size: 20),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  /// `H:MM:SS`, the same format the player uses.
+  String _formatDuration(Duration duration) {
+    final totalSeconds = duration.inSeconds;
+    final hours = totalSeconds ~/ 3600;
+    final minutes = (totalSeconds % 3600) ~/ 60;
+    final seconds = totalSeconds % 60;
+    return '$hours:${minutes.toString().padLeft(2, '0')}:'
+        '${seconds.toString().padLeft(2, '0')}';
+  }
+
+  Widget _buildEmpty() {
+    return const Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.history, size: 48, color: Colors.black38),
+          SizedBox(height: 12),
+          Text('No watch history yet'),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEntry(BuildContext context, WatchHistoryEntry entry) {
+    final subtitle =
+        '${_formatDuration(entry.duration)} • last at '
+        '${_formatDuration(entry.position)}';
+
+    return ListTile(
+      leading: _thumbnail(entry),
+      title: Text(entry.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            subtitle,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const SizedBox(height: 4),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(2),
+            child: LinearProgressIndicator(
+              value: entry.progress,
+              minHeight: 3,
+            ),
+          ),
+        ],
+      ),
+      onTap: () => _open(entry),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<List<WatchHistoryEntry>>(
+      future: _history,
+      builder: (context, snapshot) {
+        final entries = snapshot.data ?? const <WatchHistoryEntry>[];
+
+        if (entries.isEmpty) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(
+              child: SizedBox.square(
+                dimension: 35,
+                child: CircularProgressIndicator(),
+              ),
+            );
+          }
+          return _buildEmpty();
+        }
+
+        return ListView.builder(
+          itemCount: entries.length,
+          itemBuilder: (context, index) => _buildEntry(
+            context,
+            entries[index],
+          ),
+        );
+      },
+    );
   }
 }

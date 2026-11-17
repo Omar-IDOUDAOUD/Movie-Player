@@ -10,7 +10,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:movie_player/main.dart';
-import 'package:movie_player/routes/history.dart';
 import 'package:movie_player/routes/landing.dart';
 import 'package:movie_player/routes/local_videos_repo.dart';
 import 'package:movie_player/routes/player.dart';
@@ -40,30 +39,44 @@ void main() {
   // Keep the saved preferences of one test out of the next one.
   tearDown(() => SharedPreferences.setMockInitialValues({}));
 
-  testWidgets('landing page shows the url input and the folder button',
+  testWidgets('landing page shows the tabs and the folder button',
       (WidgetTester tester) async {
     await tester.pumpWidget(const MoviePlayer());
 
     expect(find.text('MPlayer'), findsOneWidget);
-    // Title, video url and web page url inputs.
-    expect(find.byType(TextField), findsNWidgets(3));
-    expect(find.byIcon(Icons.play_arrow_rounded), findsOneWidget);
-    expect(find.byTooltip('Watch history'), findsOneWidget);
+    expect(find.byType(NavigationBar), findsOneWidget);
+    expect(find.text('Folder'), findsOneWidget);
+    expect(find.text('Network'), findsOneWidget);
+    expect(find.text('Web page'), findsOneWidget);
+    expect(find.text('History'), findsOneWidget);
+    expect(find.byTooltip('Toggle theme'), findsOneWidget);
+    // The first tab is the folder one.
     expect(find.text('Play videos from folder'), findsOneWidget);
     expect(find.text('Select a Folder'), findsOneWidget);
-    expect(find.text('Play Video from a web page url'), findsOneWidget);
-    expect(find.byTooltip('Scan page for videos'), findsOneWidget);
+    // The other tabs are not built while hidden.
+    expect(find.byType(TextField), findsNothing);
     // Nothing was saved yet, so the section stays hidden.
     expect(find.text('Picked folders'), findsNothing);
+    // History lives in its own tab now, not in the app bar.
+    expect(find.byTooltip('Watch history'), findsNothing);
   });
 
-  /// The landing page inputs in order: title, video url, web page url.
+  /// Switches to the landing page tab with the [label] of its bottom bar.
+  Future<void> openTab(WidgetTester tester, String label) async {
+    await tester.tap(find.text(label));
+    await tester.pump();
+  }
+
+  /// On the Network tab: the title field first, the video url second.
   Finder videoUrlField() => find.byType(TextField).at(1);
-  Finder pageUrlField() => find.byType(TextField).at(2);
+
+  /// The Web page tab only has the page url field.
+  Finder pageUrlField() => find.byType(TextField);
 
   testWidgets('empty url shows an error instead of opening the player',
       (WidgetTester tester) async {
     await tester.pumpWidget(const MoviePlayer());
+    await openTab(tester, 'Network');
 
     await tester.tap(find.byIcon(Icons.play_arrow_rounded));
     await tester.pump();
@@ -75,6 +88,7 @@ void main() {
   testWidgets('malformed url shows an error instead of opening the player',
       (WidgetTester tester) async {
     await tester.pumpWidget(const MoviePlayer());
+    await openTab(tester, 'Network');
 
     await tester.enterText(videoUrlField(), 'not a url');
     await tester.tap(find.byIcon(Icons.play_arrow_rounded));
@@ -87,6 +101,7 @@ void main() {
   testWidgets('the error clears while typing a new url',
       (WidgetTester tester) async {
     await tester.pumpWidget(const MoviePlayer());
+    await openTab(tester, 'Network');
 
     await tester.tap(find.byIcon(Icons.play_arrow_rounded));
     await tester.pump();
@@ -99,6 +114,7 @@ void main() {
 
   testWidgets('a valid url opens the player page', (WidgetTester tester) async {
     await tester.pumpWidget(const MoviePlayer());
+    await openTab(tester, 'Network');
 
     // A missing scheme is completed with https://
     await tester.enterText(videoUrlField(), 'example.com/video.mp4');
@@ -251,19 +267,18 @@ void main() {
     expect(find.byType(SnackBar), findsNothing);
   });
 
-  testWidgets('the history button opens the watch history page',
+  testWidgets('the history tab shows the watch history',
       (WidgetTester tester) async {
     SharedPreferences.setMockInitialValues({});
 
     await tester.pumpWidget(const MoviePlayer());
-    await tester.tap(find.byTooltip('Watch history'));
+    await openTab(tester, 'History');
     await tester.pumpAndSettle();
 
-    expect(find.byType(HistoryPage), findsOneWidget);
     expect(find.text('No watch history yet'), findsOneWidget);
   });
 
-  testWidgets('history page shows thumbnail, duration and watch position',
+  testWidgets('history tab shows thumbnail, duration and watch position',
       (WidgetTester tester) async {
     SharedPreferences.setMockInitialValues({
       'watch_history': jsonEncode([
@@ -277,7 +292,8 @@ void main() {
       ]),
     });
 
-    await tester.pumpWidget(const MaterialApp(home: HistoryPage()));
+    await tester.pumpWidget(const MoviePlayer());
+    await openTab(tester, 'History');
     await tester.pumpAndSettle();
 
     expect(find.byType(ListTile), findsOneWidget);
@@ -302,7 +318,8 @@ void main() {
       ]),
     });
 
-    await tester.pumpWidget(const MaterialApp(home: HistoryPage()));
+    await tester.pumpWidget(const MoviePlayer());
+    await openTab(tester, 'History');
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('movie.mp4'));
@@ -314,7 +331,8 @@ void main() {
 
   // ------------------------------------------------- play from a web page
 
-  /// Pumps a landing page whose page scanner is [scan].
+  /// Pumps a landing page whose page scanner is [scan], on the tab that
+  /// holds it.
   Future<void> pumpLanding(
     WidgetTester tester,
     Future<List<Uri>> Function(Uri page) scan,
@@ -325,6 +343,7 @@ void main() {
         home: LandingPage(onToggleTheme: () {}, findVideos: scan),
       ),
     );
+    await openTab(tester, 'Web page');
   }
 
   testWidgets('an invalid web page url shows an error instead of scanning',
