@@ -7,6 +7,7 @@ import 'package:dir_picker/dir_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:movie_player/web_page_scan.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:movie_player/main.dart';
@@ -352,7 +353,7 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     await tester.pumpWidget(
       MaterialApp(
-        home: LandingPage.HomePage(onToggleTheme: () {}, findVideos: scan),
+        home: HomePage(onToggleTheme: () {}),
       ),
     );
     // Let the always-built history tab finish loading its list, so its
@@ -563,13 +564,13 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
-        home: LandingPage.HomePage(
+        home: HomePage(
           onToggleTheme: () {},
           sharedPage: (url: 'https://example.com/ep/1', token: 1),
           findVideos: (page) async {
             scans++;
             scanned.add(page);
-            return const [];
+            return PageVideoScanResult(title: "test title", videos: []);
           },
         ),
       ),
@@ -591,7 +592,7 @@ void main() {
     SharedPreferences.setMockInitialValues({});
 
     Widget build(({String url, int token})? shared) => MaterialApp(
-          home: LandingPage.HomePage(
+          home: HomePage(
             onToggleTheme: () {},
             sharedPage: shared,
             findVideos: (page) async {

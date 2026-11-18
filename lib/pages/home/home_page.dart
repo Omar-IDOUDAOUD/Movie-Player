@@ -3,6 +3,7 @@ import 'package:movie_player/pages/home/tabs/folder_tab.dart';
 import 'package:movie_player/pages/home/tabs/history_tab.dart';
 import 'package:movie_player/pages/home/tabs/network_tab.dart';
 import 'package:movie_player/pages/home/tabs/web_page_tab.dart';
+import 'package:movie_player/web_page_scan.dart';
 
 /// The landing page: a bottom navigation bar over the four tab views —
 /// pick a folder, play a network video, extract videos from a web page
@@ -10,8 +11,8 @@ import 'package:movie_player/pages/home/tabs/web_page_tab.dart';
 ///
 /// All tabs stay built ([IndexedStack]) so a tab keeps its state (typed
 /// urls, a running scan) while another one is showing.
-class LandingPage extends StatefulWidget {
-  const LandingPage.HomePage({
+class HomePage extends StatefulWidget {
+  const HomePage({
     super.key,
     required this.onToggleTheme,
     this.findVideos,
@@ -23,7 +24,7 @@ class LandingPage extends StatefulWidget {
   /// Scans a web page for videos with both extraction mechanisms (html
   /// scraping and invisible WebView). Defaults to the combined scan of
   /// both extractors; tests inject a stub so no network is used.
-  final Future<List<Uri>> Function(Uri page)? findVideos;
+  final Future<PageVideoScanResult> Function(Uri page)? findVideos;
 
   /// A web page shared into the app: the web page tab opens and its
   /// extractor starts as soon as the link arrives (a fresh token also
@@ -31,10 +32,10 @@ class LandingPage extends StatefulWidget {
   final ({String url, int token})? sharedPage;
 
   @override
-  State<LandingPage> createState() => _LandingPageState();
+  State<HomePage> createState() => _HomePageState();
 }
 
-class _LandingPageState extends State<LandingPage> {
+class _HomePageState extends State<HomePage> {
   /// Index of the web page tab inside the [NavigationBar] destinations.
   static const _webTab = 2;
 
@@ -54,7 +55,7 @@ class _LandingPageState extends State<LandingPage> {
   }
 
   @override
-  void didUpdateWidget(LandingPage oldWidget) {
+  void didUpdateWidget(HomePage oldWidget) {
     super.didUpdateWidget(oldWidget);
     final shared = widget.sharedPage;
     if (shared != null && shared.token != oldWidget.sharedPage?.token) {

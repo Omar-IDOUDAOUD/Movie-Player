@@ -142,10 +142,10 @@ class _MoviePlayerState extends State<MoviePlayer> {
         ),
         useMaterial3: true,
       ),
-      home: LandingPage.HomePage(
+      home: HomePage(
         onToggleTheme: _toggleTheme,
         sharedPage: _sharedPage,
-        findVideos: widget.findVideos,
+        findVideos: null,
       ),
     );
   }

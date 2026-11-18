@@ -19,7 +19,7 @@ class WebPageTab extends StatefulWidget {
   /// Scans a web page for videos with both extraction mechanisms (html
   /// scraping and invisible WebView). Defaults to [findAllVideosOnPage];
   /// tests inject a stub so no network is used.
-  final Future<List<Uri>> Function(Uri page)? findVideos;
+  final Future<PageVideoScanResult> Function(Uri page)? findVideos;
 
   /// A web page shared into the app: its extractor starts as soon as the
   /// link arrives (a fresh token also makes a repeated share rescan).
@@ -93,16 +93,17 @@ class _WebPageTabState extends State<WebPageTab> {
   Future<void> _findVideos(Uri page) async {
     try {
       final scan = widget.findVideos ?? findAllVideosOnPage;
-      final videos = await scan(page);
+      final response = (await scan(page));
+      
       if (!mounted) return;
       setState(() => _scanning = false);
 
-      if (videos.isEmpty) {
+      if (response.videos.isEmpty) {
         _showMessage('No video found on this page');
-      } else if (videos.length == 1) {
-        _openVideo(videos.first);
+      } else if (response.videos.length == 1) {
+        _openVideo(response.videos.first, response.title);
       } else {
-        await _chooseVideo(videos);
+        await _chooseVideo(response);
       }
     } catch (_) {
       if (!mounted) return;
@@ -112,7 +113,7 @@ class _WebPageTabState extends State<WebPageTab> {
   }
 
   /// Lets the user pick one of the videos found on the page.
-  Future<void> _chooseVideo(List<Uri> videos) async {
+  Future<void> _chooseVideo(PageVideoScanResult result) async {
     final selected = await showDialog<Uri>(
       context: context,
       builder: (context) => AlertDialog(
@@ -122,7 +123,7 @@ class _WebPageTabState extends State<WebPageTab> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              for (final video in videos)
+              for (final video in result.videos)
                 TextButton(
                   onPressed: () => Navigator.pop(context, video),
                   child: Text(
@@ -144,14 +145,14 @@ class _WebPageTabState extends State<WebPageTab> {
       ),
     );
     if (selected == null || !mounted) return;
-    _openVideo(selected);
+    _openVideo(selected, result.title);
   }
 
-  void _openVideo(Uri video) {
+  void _openVideo(Uri video, String title) {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => PlayerPage(videoUri: video, videoTitle: ''),
+        builder: (_) => PlayerPage(videoUri: video, videoTitle: title),
       ),
     );
   }
