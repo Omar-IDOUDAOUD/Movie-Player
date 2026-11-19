@@ -1,17 +1,14 @@
 // Smoke tests for the movie player app.
 
-import 'dart:async';
 import 'dart:convert';
 
 import 'package:dir_picker/dir_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:movie_player/web_page_scan.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:movie_player/main.dart';
-import 'package:movie_player/pages/home/home_page.dart';
 import 'package:movie_player/folder_repo.dart';
 import 'package:movie_player/pages/player/player_page.dart';
 import 'package:movie_player/pages/folder_videos/folder_videos_page.dart';
@@ -55,17 +52,17 @@ void main() {
     // The first tab is the folder one.
     expect(find.text('Play videos from folder'), findsOneWidget);
     expect(find.text('Select a Folder'), findsOneWidget);
-    // All tabs stay built (IndexedStack): title, video url and page url.
-    // Hidden tabs are offstage, so these look past the offstage nodes.
+    // All tabs stay built (IndexedStack): the network tab's two inputs
+    // and the browser address field. Hidden tabs are offstage, so these
+    // look past the offstage nodes.
     expect(find.byType(TextField, skipOffstage: false), findsNWidgets(3));
     expect(
       find.text('Play Network Video', skipOffstage: false),
       findsOneWidget,
     );
-    expect(
-      find.text('Play Video from a web page url', skipOffstage: false),
-      findsOneWidget,
-    );
+    // The web page tab is a browser: page strip and address controls.
+    expect(find.byTooltip('New tab', skipOffstage: false), findsOneWidget);
+    expect(find.byTooltip('Back', skipOffstage: false), findsOneWidget);
     // Nothing was saved yet, so the section stays hidden.
     expect(find.text('Picked folders'), findsNothing);
     // History lives in its own tab now, not in the app bar.
@@ -81,10 +78,8 @@ void main() {
   /// The landing page inputs in order: title, video url (Network tab),
   /// page url (Web page tab). Hidden tabs are offstage, so the indices
   /// are taken across all of them.
-  Finder videoUrlField() =>
-      find.byType(TextField, skipOffstage: false).at(1);
-  Finder pageUrlField() =>
-      find.byType(TextField, skipOffstage: false).at(2);
+  Finder videoUrlField() => find.byType(TextField, skipOffstage: false).at(1);
+  Finder pageUrlField() => find.byType(TextField, skipOffstage: false).at(2);
 
   testWidgets('empty url shows an error instead of opening the player',
       (WidgetTester tester) async {
@@ -342,138 +337,83 @@ void main() {
     expect(find.byType(PlayerPage), findsOneWidget);
   });
 
-  // ------------------------------------------------- play from a web page
+  // --------------------------------------------------------------- browser
 
-  /// Pumps a landing page whose page scanner is [scan], on the tab that
-  /// holds it.
-  Future<void> pumpLanding(
-    WidgetTester tester,
-    Future<List<Uri>> Function(Uri page) scan,
-  ) async {
+  /// Pumps the app on the browser tab of the landing page.
+  Future<void> openBrowser(WidgetTester tester) async {
     SharedPreferences.setMockInitialValues({});
-    await tester.pumpWidget(
-      MaterialApp(
-        home: HomePage(onToggleTheme: () {}),
-      ),
-    );
-    // Let the always-built history tab finish loading its list, so its
-    // loading spinner doesn't count in later expectations.
+    await tester.pumpWidget(const MoviePlayer());
     await tester.pumpAndSettle();
     await openTab(tester, 'Web page');
+    await tester.pumpAndSettle();
   }
 
-  testWidgets('an invalid web page url shows an error instead of scanning',
+  testWidgets('the web page tab is a browser', (WidgetTester tester) async {
+    await openBrowser(tester);
+
+    // A strip of open pages, an address field and the nav buttons.
+    expect(find.byKey(const ValueKey('browser-tab-0')), findsOneWidget);
+    expect(find.byTooltip('New tab'), findsOneWidget);
+    expect(find.byTooltip('Back'), findsOneWidget);
+    expect(find.byTooltip('Forward'), findsOneWidget);
+    expect(find.byTooltip('Reload'), findsOneWidget);
+    expect(pageUrlField(), findsOneWidget);
+    // No web view can run in widget tests: the chrome says so.
+    expect(
+      find.text('The browser runs inside the Android app'),
+      findsOneWidget,
+    );
+  });
+
+  test('the omnibox opens an address or searches google', () {
+    expect(
+      browserTargetUri('example.com/watch')?.toString(),
+      'https://example.com/watch',
+    );
+    expect(
+      browserTargetUri('localhost:8080')?.toString(),
+      'https://localhost:8080',
+    );
+    expect(
+      browserTargetUri('cats and dogs')?.toString(),
+      'https://www.google.com/search?q=cats+and+dogs',
+    );
+    expect(
+      browserTargetUri('flutter')?.toString(),
+      'https://www.google.com/search?q=flutter',
+    );
+    expect(browserTargetUri('   '), isNull);
+  });
+
+  testWidgets('typing an address in the omnibox shows where it goes',
       (WidgetTester tester) async {
-    var scanned = false;
-    await pumpLanding(tester, (page) async {
-      scanned = true;
-      return const [];
-    });
+    await openBrowser(tester);
 
-    await tester.tap(find.byTooltip('Scan page for videos'));
-    await tester.pump();
-
-    expect(find.text('Enter a valid web page url'), findsOneWidget);
-    expect(scanned, isFalse);
-
-    // The error clears while typing a valid page url.
     await tester.enterText(pageUrlField(), 'example.com/watch');
+    await tester.testTextInput.receiveAction(TextInputAction.go);
     await tester.pump();
-    expect(find.text('Enter a valid web page url'), findsNothing);
+
+    expect(find.text('https://example.com/watch'), findsOneWidget);
   });
 
-  testWidgets('the scan shows a spinner until the videos are found',
+  testWidgets('tabs can be opened, switched and closed',
       (WidgetTester tester) async {
-    final scan = Completer<List<Uri>>();
-    await pumpLanding(tester, (page) => scan.future);
+    await openBrowser(tester);
 
-    await tester.enterText(
-      pageUrlField(),
-      'https://example.com/episode/1',
-    );
-    await tester.tap(find.byTooltip('Scan page for videos'));
+    await tester.tap(find.byTooltip('New tab'));
     await tester.pump();
+    expect(find.byKey(const ValueKey('browser-tab-1')), findsOneWidget);
 
-    expect(find.byType(CircularProgressIndicator), findsOneWidget);
-
-    scan.complete([Uri.parse('https://cdn.example.com/video.m3u8')]);
+    // Switching between the open pages works with the chips.
+    await tester.tap(find.byKey(const ValueKey('browser-tab-0')));
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.byKey(const ValueKey('browser-tab-0')), findsOneWidget);
 
-    expect(find.byType(CircularProgressIndicator), findsNothing);
-    expect(find.byType(PlayerPage), findsOneWidget);
-  });
-
-  testWidgets('a page with one video plays it directly',
-      (WidgetTester tester) async {
-    final video = Uri.parse('https://cdn.example.com/movie.mp4');
-    await pumpLanding(tester, (page) async => [video]);
-
-    await tester.enterText(pageUrlField(), 'example.com/episode/1');
-    await tester.tap(find.byTooltip('Scan page for videos'));
+    // Closing the newest tab leaves the first one alone.
+    await tester.tap(find.byTooltip('Close tab').last);
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 400));
-
-    expect(find.byType(PlayerPage), findsOneWidget);
-    expect(find.byType(AlertDialog), findsNothing);
-  });
-
-  testWidgets('a page with many videos lets the user select one',
-      (WidgetTester tester) async {
-    final first = Uri.parse('https://cdn.example.com/first.m3u8');
-    final second = Uri.parse('https://cdn.example.com/second.mp4');
-    await pumpLanding(tester, (page) async => [first, second]);
-
-    await tester.enterText(pageUrlField(), 'example.com/episode/1');
-    await tester.tap(find.byTooltip('Scan page for videos'));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 400));
-
-    expect(find.byType(AlertDialog), findsOneWidget);
-    expect(find.text(first.toString()), findsOneWidget);
-    expect(find.text(second.toString()), findsOneWidget);
-    expect(find.byType(PlayerPage), findsNothing);
-
-    await tester.tap(find.text(second.toString()));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 400));
-
-    expect(find.byType(AlertDialog), findsNothing);
-    expect(find.byType(PlayerPage), findsOneWidget);
-  });
-
-  testWidgets('a page without videos shows a message', (WidgetTester tester) async {
-    await pumpLanding(tester, (page) async => const []);
-
-    await tester.enterText(pageUrlField(), 'example.com/episode/1');
-    await tester.tap(find.byTooltip('Scan page for videos'));
-    await tester.pump();
-    // Let the snackbar finish entering so its dismiss timer starts.
-    await tester.pump(const Duration(milliseconds: 400));
-
-    expect(find.text('No video found on this page'), findsOneWidget);
-
-    // Let the snackbar dismiss itself so no timer is left pending.
-    await tester.pump(const Duration(seconds: 5));
-    await tester.pumpAndSettle();
-    expect(find.byType(SnackBar), findsNothing);
-  });
-
-  testWidgets('a page that cannot be read shows a message',
-      (WidgetTester tester) async {
-    await pumpLanding(
-      tester,
-      (page) async => throw Exception('boom'),
-    );
-
-    await tester.enterText(pageUrlField(), 'example.com/episode/1');
-    await tester.tap(find.byTooltip('Scan page for videos'));
-    await tester.pump();
-
-    expect(find.text('Could not read this web page'), findsOneWidget);
-
-    await tester.pump(const Duration(seconds: 5));
-    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('browser-tab-1')), findsNothing);
+    expect(find.byKey(const ValueKey('browser-tab-0')), findsOneWidget);
   });
 
   // ------------------------------------------------------ shared into app
@@ -533,86 +473,16 @@ void main() {
     expect(find.byType(PlayerPage), findsOneWidget);
   });
 
-  testWidgets('a shared web page link lands on the landing page and scans it',
+  testWidgets('a shared web page link is ignored for now',
       (WidgetTester tester) async {
-    var scans = 0;
-    await tester.pumpWidget(
-      MoviePlayer(
-        findVideos: (page) async {
-          scans++;
-          return const [];
-        },
-      ),
-    );
+    await tester.pumpWidget(const MoviePlayer());
     await tester.pumpAndSettle();
 
     await shareLink(tester, 'https://example.com/episode/1');
+    await tester.pump(const Duration(milliseconds: 400));
 
-    expect(scans, 1);
-    expect(find.text('https://example.com/episode/1'), findsOneWidget);
-
-    // Let the snackbar from the (stubbed) scan dismiss itself.
-    await tester.pump(const Duration(seconds: 5));
-    await tester.pumpAndSettle();
-  });
-
-  testWidgets('a web page link shared into the landing page scans it at once',
-      (WidgetTester tester) async {
-    var scans = 0;
-    final scanned = <Uri>[];
-    SharedPreferences.setMockInitialValues({});
-
-    await tester.pumpWidget(
-      MaterialApp(
-        home: HomePage(
-          onToggleTheme: () {},
-          sharedPage: (url: 'https://example.com/ep/1', token: 1),
-          findVideos: (page) async {
-            scans++;
-            scanned.add(page);
-            return PageVideoScanResult(title: "test title", videos: []);
-          },
-        ),
-      ),
-    );
-    await tester.pump();
-    await tester.pump();
-
-    expect(scans, 1);
-    expect(scanned.single.toString(), 'https://example.com/ep/1');
-    expect(find.text('https://example.com/ep/1'), findsOneWidget);
-
-    await tester.pump(const Duration(seconds: 5));
-    await tester.pumpAndSettle();
-  });
-
-  testWidgets('a link shared while running starts a new scan',
-      (WidgetTester tester) async {
-    var scans = 0;
-    SharedPreferences.setMockInitialValues({});
-
-    Widget build(({String url, int token})? shared) => MaterialApp(
-          home: HomePage(
-            onToggleTheme: () {},
-            sharedPage: shared,
-            findVideos: (page) async {
-              scans++;
-              return const [];
-            },
-          ),
-        );
-
-    await tester.pumpWidget(build(null));
-    expect(scans, 0);
-
-    await tester.pumpWidget(build((url: 'https://example.com/ep/2', token: 7)));
-    await tester.pump();
-    await tester.pump();
-
-    expect(scans, 1);
-    expect(find.text('https://example.com/ep/2'), findsOneWidget);
-
-    await tester.pump(const Duration(seconds: 5));
-    await tester.pumpAndSettle();
+    // No player opens and the landing page stays on its first tab.
+    expect(find.byType(PlayerPage), findsNothing);
+    expect(find.text('Play videos from folder'), findsOneWidget);
   });
 }

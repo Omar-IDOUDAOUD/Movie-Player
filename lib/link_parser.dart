@@ -33,6 +33,28 @@ Uri? parsePageUri(String raw) {
   return uri.scheme == 'http' || uri.scheme == 'https' ? uri : null;
 }
 
+/// The address the browser should open for [input]: the address itself
+/// when the input looks like one, a Google search otherwise. Empty
+/// input gives `null`, there is nothing to open.
+///
+/// A token with a dot or a port separator is an address
+/// (`example.com/watch`, `localhost:8080`), a single word or anything
+/// with a space is a search.
+Uri? browserTargetUri(String input) {
+  final text = input.trim();
+  if (text.isEmpty) return null;
+
+  if (!text.contains(RegExp(r'\s')) &&
+      (text.contains('.') || text.contains(':'))) {
+    final page = parsePageUri(text);
+    if (page != null) return page;
+  }
+
+  return Uri.parse(
+    'https://www.google.com/search?q=${Uri.encodeQueryComponent(text)}',
+  );
+}
+
 /// The url inside text shared from another app, or `null` when there is
 /// none.
 ///

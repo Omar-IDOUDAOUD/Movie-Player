@@ -14,10 +14,7 @@ void main() {
 const sharedLinkChannel = MethodChannel('movie_player/shared_link');
 
 class MoviePlayer extends StatefulWidget {
-  const MoviePlayer({super.key, this.findVideos});
-
-  /// Passed to the landing page; tests inject a stub so no network is used.
-  final Future<List<Uri>> Function(Uri page)? findVideos;
+  const MoviePlayer({super.key});
 
   @override
   State<MoviePlayer> createState() => _MoviePlayerState();
@@ -29,11 +26,6 @@ class _MoviePlayerState extends State<MoviePlayer> {
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
 
   ThemeMode _themeMode = ThemeMode.system;
-
-  /// A web page shared into the app, passed to the landing page so its
-  /// extractor starts as soon as the page arrives.
-  ({String url, int token})? _sharedPage;
-  var _sharedToken = 0;
 
   @override
   void initState() {
@@ -91,29 +83,21 @@ class _MoviePlayerState extends State<MoviePlayer> {
     }
   }
 
-  /// Opens a shared video right away, or hands a shared web page to the
-  /// landing page extractor.
+  /// Opens a shared video right away.
+  ///
+  /// A shared web page is ignored for now: the browser tab will take
+  /// it over in a later step.
   void _handleSharedLink(String raw) {
     final link = parseSharedLink(raw);
-    if (link == null) return;
+    if (link == null || !isDirectVideoLink(link)) return;
 
     void open() {
       if (!mounted) return;
-      if (isDirectVideoLink(link)) {
-        _navigatorKey.currentState?.push(
-          MaterialPageRoute(
-            builder: (_) => PlayerPage(videoUri: link, videoTitle: ''),
-          ),
-        );
-        return;
-      }
-
-      // A web page: show the landing page and scan it there.
-      _navigatorKey.currentState?.popUntil((route) => route.isFirst);
-      setState(() {
-        _sharedToken++;
-        _sharedPage = (url: link.toString(), token: _sharedToken);
-      });
+      _navigatorKey.currentState?.push(
+        MaterialPageRoute(
+          builder: (_) => PlayerPage(videoUri: link, videoTitle: ''),
+        ),
+      );
     }
 
     if (_navigatorKey.currentState != null) {
@@ -144,8 +128,6 @@ class _MoviePlayerState extends State<MoviePlayer> {
       ),
       home: HomePage(
         onToggleTheme: _toggleTheme,
-        sharedPage: _sharedPage,
-        findVideos: null,
       ),
     );
   }
