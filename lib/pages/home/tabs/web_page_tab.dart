@@ -85,13 +85,28 @@ class _WebPageTabState extends State<WebPageTab> {
   /// the bar always exactly covers the room reserved for it.
   static const _topBarHeight = 44.0 + 56.0;
 
-  /// How far the page must move before the bar snaps.
-  static const _snapThreshold = 16;
+  /// How far the page must move before the bar snaps, in logical
+  /// pixels. The web view reports raw device pixels, so this is scaled
+  /// by the device pixel ratio — a bare "16" would be ~5dp on a 3x
+  /// screen and make the bar flip on every scroll wobble.
+  static const _snapThreshold = 56.0;
+
+  /// Minimum time between two snaps: flipping again while the bar is
+  /// still animating reads as a glitch.
+  static const _snapCooldown = Duration(milliseconds: 300);
 
   static const _barAnimDuration = Duration(milliseconds: 180);
 
+  /// When the bar last snapped, for [_snapCooldown].
+  DateTime? _lastSnap;
+
   /// Whether the floating top bar currently covers the page.
   var _barShown = true;
+
+  bool get _canSnap {
+    final last = _lastSnap;
+    return last == null || DateTime.now().difference(last) >= _snapCooldown;
+  }
 
   /// Tells every frame of every page to report when an input inside it
   /// takes focus (iframes included), so the address field lets go.
@@ -117,7 +132,22 @@ document.addEventListener('focusin', function (event) {
     final tab = _activeTab;
     tab.scrollAnchor = tab.scrollY;
     if (_barShown) return;
+    _lastSnap = DateTime.now();
     setState(() => _barShown = true);
+  }
+
+  /// Flips the bar and restarts the snap cooldown. A snap that is
+  /// still cooling down re-arms its anchor instead, so the same
+  /// movement decides again one threshold later — nothing is lost and
+  /// nothing flips twice in a row.
+  void _snap({required bool shown, required _BrowserTab tab, required int y}) {
+    if (!_canSnap) {
+      tab.scrollAnchor = y;
+      return;
+    }
+    _lastSnap = DateTime.now();
+    tab.scrollAnchor = y;
+    setState(() => _barShown = shown);
   }
 
   /// Snaps the top bar with the page: away on the way down, back on
@@ -129,38 +159,38 @@ document.addEventListener('focusin', function (event) {
     // The address field keeps the bar pinned while it is focused.
     if (_addressFocus.hasFocus) return;
 
+    // The bar moves in logical pixels, the web view reports raw ones.
+    final threshold =
+        (MediaQuery.devicePixelRatioOf(context) * _snapThreshold).round();
+
     if (y <= 0) {
+      // At the very top the bar always shows; the next scroll down
+      // still needs the full threshold to hide it again.
       tab.scrollAnchor = 0;
-      if (!_barShown) setState(() => _barShown = true);
+      if (!_barShown) {
+        _lastSnap = DateTime.now();
+        setState(() => _barShown = true);
+      }
       return;
     }
 
     final anchor = tab.scrollAnchor;
     if (_barShown) {
-      if (y - anchor >= _snapThreshold) {
-        setState(() {
-          _barShown = false;
-          tab.scrollAnchor = y;
-        });
-        
+      if (y - anchor >= threshold) {
+        _snap(shown: false, tab: tab, y: y);
       } else if (y < anchor) {
         // Keep the anchor at the topmost point: a reversal back down
         // then hides the bar again after the threshold.
         tab.scrollAnchor = y;
       }
     } else {
-      if (anchor - y >= _snapThreshold) {
-        setState(() {
-          _barShown = true;
-          tab.scrollAnchor = y;
-        });
+      if (anchor - y >= threshold) {
+        _snap(shown: true, tab: tab, y: y);
       } else if (y > anchor) {
         // Follow the deepest point: scrolling up from it reveals.
         tab.scrollAnchor = y;
       }
     }
-
-    
   }
 
   @override
