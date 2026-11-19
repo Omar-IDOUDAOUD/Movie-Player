@@ -1,3 +1,4 @@
+import 'dart:collection';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -14,6 +15,11 @@ import 'package:movie_player/link_parser.dart';
 /// top), an address field that also searches Google, and the usual
 /// navigation controls. Long-pressing a link offers to open it in a
 /// new tab or to copy it.
+///
+/// The top bar (strip + address field) floats over the page: it shows
+/// while the page sits at its top and snaps away as soon as the user
+/// scrolls down, coming back on the way up. An input focused inside
+/// the page also releases the address field.
 class WebPageTab extends StatefulWidget {
   const WebPageTab({super.key});
 
@@ -41,6 +47,13 @@ class _BrowserTab {
   bool canGoBack = false;
   bool canGoForward = false;
 
+  /// Last scroll position the page reported, in css pixels.
+  int scrollY = 0;
+
+  /// The position the top bar last snapped at; the bar toggles once
+  /// the page has moved far enough away from it.
+  int scrollAnchor = 0;
+
   /// Set once the platform web view for this tab exists.
   InAppWebViewController? controller;
 }
@@ -67,6 +80,89 @@ class _WebPageTabState extends State<WebPageTab> {
   /// tests, desktop runs) the chrome still builds and shows a notice.
   bool get _hasWebView => Platform.isAndroid || Platform.isIOS;
 
+  /// Height of the floating top bar: the 44px strip plus the 56px
+  /// address row. The spacer and the slide distance both use it, so
+  /// the bar always exactly covers the room reserved for it.
+  static const _topBarHeight = 44.0 + 56.0;
+
+  /// How far the page must move before the bar snaps.
+  static const _snapThreshold = 16;
+
+  static const _barAnimDuration = Duration(milliseconds: 180);
+
+  /// Whether the floating top bar currently covers the page.
+  var _barShown = true;
+
+  /// Tells every frame of every page to report when an input inside it
+  /// takes focus (iframes included), so the address field lets go.
+  static final _pageFocusScript = UserScript(
+    source: '''
+document.addEventListener('focusin', function (event) {
+  var target = event.target;
+  if (!target) return;
+  var tag = (target.tagName || '').toUpperCase();
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || target.isContentEditable) {
+    var bridge = window.flutter_inappwebview;
+    if (bridge && bridge.callHandler) bridge.callHandler('pageInputFocused');
+  }
+}, true);
+''',
+    injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+    forMainFrameOnly: false,
+  );
+
+  /// Brings the top bar back and remembers where the page stands now,
+  /// so the next scroll decides from the current position.
+  void _showTopBar() {
+    final tab = _activeTab;
+    tab.scrollAnchor = tab.scrollY;
+    if (_barShown) return;
+    setState(() => _barShown = true);
+  }
+
+  /// Snaps the top bar with the page: away on the way down, back on
+  /// the way up (or at the very top). Only the visible tab drives it.
+  void _handleScroll(_BrowserTab tab, int y) {
+    if (!mounted || !_tabs.contains(tab)) return;
+    tab.scrollY = y;
+    if (tab.id != _activeId) return;
+    // The address field keeps the bar pinned while it is focused.
+    if (_addressFocus.hasFocus) return;
+
+    if (y <= 0) {
+      tab.scrollAnchor = 0;
+      if (!_barShown) setState(() => _barShown = true);
+      return;
+    }
+
+    final anchor = tab.scrollAnchor;
+    if (_barShown) {
+      if (y - anchor >= _snapThreshold) {
+        setState(() {
+          _barShown = false;
+          tab.scrollAnchor = y;
+        });
+        
+      } else if (y < anchor) {
+        // Keep the anchor at the topmost point: a reversal back down
+        // then hides the bar again after the threshold.
+        tab.scrollAnchor = y;
+      }
+    } else {
+      if (anchor - y >= _snapThreshold) {
+        setState(() {
+          _barShown = true;
+          tab.scrollAnchor = y;
+        });
+      } else if (y > anchor) {
+        // Follow the deepest point: scrolling up from it reveals.
+        tab.scrollAnchor = y;
+      }
+    }
+
+    
+  }
+
   @override
   void initState() {
     super.initState();
@@ -88,6 +184,7 @@ class _WebPageTabState extends State<WebPageTab> {
       _tabs.add(tab);
       _activeId = tab.id;
     });
+    _showTopBar();
     _syncAddress();
   }
 
@@ -111,6 +208,7 @@ class _WebPageTabState extends State<WebPageTab> {
   void _selectTab(int id) {
     if (id == _activeId) return;
     setState(() => _activeId = id);
+    _showTopBar();
     _syncAddress();
   }
 
@@ -139,6 +237,7 @@ class _WebPageTabState extends State<WebPageTab> {
       // Without a web view nothing will report progress back.
       if (tab.controller != null) tab.progress = 0;
     });
+    _showTopBar();
 
     final controller = tab.controller;
     // Not created yet: it loads [tab.url] as soon as it is.
@@ -171,7 +270,10 @@ class _WebPageTabState extends State<WebPageTab> {
       tab.progress = 0;
       if (url != null && url.isNotEmpty) tab.url = url;
     });
-    if (tab.id == _activeId) _syncAddress();
+    if (tab.id == _activeId) {
+      _showTopBar();
+      _syncAddress();
+    }
   }
 
   void _handleLoadStop(_BrowserTab tab, String? url) {
@@ -317,8 +419,19 @@ class _WebPageTabState extends State<WebPageTab> {
         // video requests fire (the extractor relied on this too).
         mediaPlaybackRequiresUserGesture: false,
       ),
+      initialUserScripts: UnmodifiableListView<UserScript>([
+        _pageFocusScript,
+      ]),
       onWebViewCreated: (controller) {
         tab.controller = controller;
+        // An input focused inside the page releases the omnibox.
+        controller.addJavaScriptHandler(
+          handlerName: 'pageInputFocused',
+          callback: (args) {
+            if (_addressFocus.hasFocus) _addressFocus.unfocus();
+            return null;
+          },
+        );
         // Loading here instead of through an initial url means a tab
         // always opens the address it holds, even one entered before
         // the web view was created.
@@ -329,6 +442,7 @@ class _WebPageTabState extends State<WebPageTab> {
       onProgressChanged: (controller, progress) =>
           _handleProgress(tab, progress),
       onTitleChanged: (controller, title) => _handleTitle(tab, title),
+      onScrollChanged: (controller, x, y) => _handleScroll(tab, y),
       onUpdateVisitedHistory: (controller, url, isReload) =>
           _handleHistory(tab, url?.toString()),
       shouldOverrideUrlLoading: _overrideUrlLoading,
@@ -409,81 +523,87 @@ class _WebPageTabState extends State<WebPageTab> {
   }
 
   /// Back, forward, the address field and reload/stop.
+  ///
+  /// Fixed at 56px so the bar's slide distance always matches the
+  /// room reserved for it.
   Widget _buildAddressBar(_BrowserTab active) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-      child: Row(
-        children: [
-          IconButton(
-            onPressed: active.canGoBack
-                ? () => _onController((c) => c.goBack())
-                : null,
-            icon: const Icon(Icons.arrow_back_rounded),
-            tooltip: 'Back',
-            visualDensity: VisualDensity.compact,
-          ),
-          IconButton(
-            onPressed: active.canGoForward
-                ? () => _onController((c) => c.goForward())
-                : null,
-            icon: const Icon(Icons.arrow_forward_rounded),
-            tooltip: 'Forward',
-            visualDensity: VisualDensity.compact,
-          ),
-          Expanded(
-            child: TextField(
-              controller: _addressController,
-              focusNode: _addressFocus,
-              keyboardType: TextInputType.url,
-              textInputAction: TextInputAction.go,
-              onChanged: (_) => setState(() {}),
-              onSubmitted: (_) => _submitAddress(),
-              style: const TextStyle(fontSize: 14),
-              decoration: InputDecoration(
-                hintText: 'Search or enter url',
-                isDense: true,
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 10,
-                ),
-                prefixIcon: const Icon(Icons.search, size: 20),
-                suffixIcon: _addressController.text.isEmpty
-                    ? null
-                    : IconButton(
-                        onPressed: () {
-                          _addressController.clear();
-                          setState(() {});
-                          _addressFocus.requestFocus();
-                        },
-                        icon: const Icon(Icons.clear, size: 18),
-                        tooltip: 'Clear',
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(
-                          minWidth: 36,
-                          minHeight: 36,
+    return SizedBox(
+      height: 56,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4),
+        child: Row(
+          children: [
+            IconButton(
+              onPressed: active.canGoBack
+                  ? () => _onController((c) => c.goBack())
+                  : null,
+              icon: const Icon(Icons.arrow_back_rounded),
+              tooltip: 'Back',
+              visualDensity: VisualDensity.compact,
+            ),
+            IconButton(
+              onPressed: active.canGoForward
+                  ? () => _onController((c) => c.goForward())
+                  : null,
+              icon: const Icon(Icons.arrow_forward_rounded),
+              tooltip: 'Forward',
+              visualDensity: VisualDensity.compact,
+            ),
+            Expanded(
+              child: TextField(
+                controller: _addressController,
+                focusNode: _addressFocus,
+                keyboardType: TextInputType.url,
+                textInputAction: TextInputAction.go,
+                onChanged: (_) => setState(() {}),
+                onSubmitted: (_) => _submitAddress(),
+                style: const TextStyle(fontSize: 14),
+                decoration: InputDecoration(
+                  hintText: 'Search or enter url',
+                  isDense: true,
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
+                  prefixIcon: const Icon(Icons.search, size: 20),
+                  suffixIcon: _addressController.text.isEmpty
+                      ? null
+                      : IconButton(
+                          onPressed: () {
+                            _addressController.clear();
+                            setState(() {});
+                            _addressFocus.requestFocus();
+                          },
+                          icon: const Icon(Icons.clear, size: 18),
+                          tooltip: 'Clear',
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(
+                            minWidth: 36,
+                            minHeight: 36,
+                          ),
+                          iconSize: 18,
+                          visualDensity: VisualDensity.compact,
                         ),
-                        iconSize: 18,
-                        visualDensity: VisualDensity.compact,
-                      ),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(24),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(24),
+                  ),
                 ),
               ),
             ),
-          ),
-          IconButton(
-            onPressed: () => _onController(
-              (c) => active.progress < 100 ? c.stopLoading() : c.reload(),
+            IconButton(
+              onPressed: () => _onController(
+                (c) => active.progress < 100 ? c.stopLoading() : c.reload(),
+              ),
+              icon: Icon(
+                active.progress < 100
+                    ? Icons.close_rounded
+                    : Icons.refresh_rounded,
+              ),
+              tooltip: active.progress < 100 ? 'Stop loading' : 'Reload',
+              visualDensity: VisualDensity.compact,
             ),
-            icon: Icon(
-              active.progress < 100
-                  ? Icons.close_rounded
-                  : Icons.refresh_rounded,
-            ),
-            tooltip: active.progress < 100 ? 'Stop loading' : 'Reload',
-            visualDensity: VisualDensity.compact,
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -492,20 +612,54 @@ class _WebPageTabState extends State<WebPageTab> {
   Widget build(BuildContext context) {
     final active = _activeTab;
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
+    return Stack(
       children: [
-        _buildTabStrip(),
-        _buildAddressBar(active),
-        if (active.progress < 100)
-          LinearProgressIndicator(value: active.progress / 100, minHeight: 2),
-        Expanded(
-          child: _hasWebView
-              ? IndexedStack(
-                  index: _tabs.indexWhere((tab) => tab.id == _activeId),
-                  children: [for (final tab in _tabs) _buildWebView(tab)],
-                )
-              : const _NoWebViewNotice(),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Room for the top bar while it shows; it collapses as the
+            // bar slides away, so no page content is ever covered.
+            AnimatedContainer(
+              duration: _barAnimDuration,
+              curve: Curves.easeOut,
+              height: _barShown ? _topBarHeight : 0,
+            ),
+            if (active.progress < 100)
+              LinearProgressIndicator(
+                value: active.progress / 100,
+                minHeight: 2,
+              ),
+            Expanded(
+              child: _hasWebView
+                  ? IndexedStack(
+                      index: _tabs.indexWhere((tab) => tab.id == _activeId),
+                      children: [for (final tab in _tabs) _buildWebView(tab)],
+                    )
+                  : const _NoWebViewNotice(),
+            ),
+          ],
+        ),
+        // The bar itself floats on top and slides out of the way.
+        Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          child: AnimatedSlide(
+            offset: _barShown ? Offset.zero : const Offset(0, -1),
+            duration: _barAnimDuration,
+            curve: Curves.easeOut,
+            child: Material(
+              color: Theme.of(context).colorScheme.surface,
+              elevation: 4,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _buildTabStrip(),
+                  _buildAddressBar(active),
+                ],
+              ),
+            ),
+          ),
         ),
       ],
     );

@@ -8,6 +8,10 @@ import 'package:movie_player/pages/home/tabs/web_page_tab.dart';
 /// pick a folder, play a network video, browse the web and the watch
 /// history.
 ///
+/// The "MPlayer" app bar belongs to the first tab only; the other tabs
+/// take the full height (the web page tab turns it into a floating
+/// browser bar instead).
+///
 /// All tabs stay built ([IndexedStack]) so a tab keeps its state (typed
 /// urls, open browser pages) while another one is showing.
 class HomePage extends StatefulWidget {
@@ -26,29 +30,39 @@ class _HomePageState extends State<HomePage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('MPlayer'),
-        centerTitle: true,
-        actions: [
-          IconButton(
-            onPressed: widget.onToggleTheme,
-            icon: Icon(
-              Theme.of(context).brightness == Brightness.dark
-                  ? Icons.light_mode_rounded
-                  : Icons.dark_mode_rounded,
-            ),
-            tooltip: 'Toggle theme',
-          ),
-        ],
-      ),
-      body: IndexedStack(
-        index: _tabIndex,
-        children: const [
-          FolderTab(),
-          NetworkTab(),
-          WebPageTab(),
-          HistoryTab(),
-        ],
+      // The app bar belongs to the folder tab only; the other tabs
+      // make the full height their own.
+      appBar: _tabIndex == 0
+          ? AppBar(
+              title: const Text('MPlayer'),
+              centerTitle: true,
+              actions: [
+                IconButton(
+                  onPressed: widget.onToggleTheme,
+                  icon: Icon(
+                    Theme.of(context).brightness == Brightness.dark
+                        ? Icons.light_mode_rounded
+                        : Icons.dark_mode_rounded,
+                  ),
+                  tooltip: 'Toggle theme',
+                ),
+              ],
+            )
+          : null,
+      // Without an app bar the body keeps the status bar padding, so
+      // it must consume it here (a no-op behind the app bar).
+      body: SafeArea(
+        top: true,
+        bottom: false,
+        child: IndexedStack(
+          index: _tabIndex,
+          children: const [
+            FolderTab(),
+            NetworkTab(),
+            WebPageTab(),
+            HistoryTab(),
+          ],
+        ),
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _tabIndex,
