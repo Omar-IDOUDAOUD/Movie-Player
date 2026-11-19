@@ -416,6 +416,26 @@ void main() {
     expect(find.byKey(const ValueKey('browser-tab-0')), findsOneWidget);
   });
 
+  testWidgets('ad blocking can be switched off and on',
+      (WidgetTester tester) async {
+    await openBrowser(tester);
+
+    final shield = find.byTooltip('Ad blocking');
+    expect(shield, findsOneWidget);
+    // On by default: the filled shield.
+    expect(find.byIcon(Icons.shield), findsOneWidget);
+
+    await tester.tap(shield);
+    await tester.pump();
+    expect(find.byIcon(Icons.shield_outlined), findsOneWidget);
+    expect(find.byIcon(Icons.shield), findsNothing);
+
+    await tester.tap(shield);
+    await tester.pump();
+    expect(find.byIcon(Icons.shield), findsOneWidget);
+    expect(find.byIcon(Icons.shield_outlined), findsNothing);
+  });
+
   // ------------------------------------------------------ shared into app
 
   /// Simulates Android sending a shared link over the platform channel.

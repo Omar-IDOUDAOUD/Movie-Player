@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
+import 'package:movie_player/ad_filter.dart';
 import 'package:movie_player/link_parser.dart';
 
 /// The "Web page" tab: a small browser.
@@ -20,6 +21,12 @@ import 'package:movie_player/link_parser.dart';
 /// while the page sits at its top and snaps away as soon as the user
 /// scrolls down, coming back on the way up. An input focused inside
 /// the page also releases the address field.
+///
+/// Ad blocking runs on two levels: the WebView's native content
+/// blockers stop ad requests ([adContentBlockers]), and a document
+/// start script hides what a blocked request leaves behind
+/// ([adHideScript]). The shield in the strip switches both off and on
+/// for every open page.
 class WebPageTab extends StatefulWidget {
   const WebPageTab({super.key});
 
@@ -102,6 +109,9 @@ class _WebPageTabState extends State<WebPageTab> {
 
   /// Whether the floating top bar currently covers the page.
   var _barShown = true;
+
+  /// Whether ad requests are blocked and ad leftovers hidden.
+  var _adBlockOn = true;
 
   bool get _canSnap {
     final last = _lastSnap;
@@ -353,29 +363,37 @@ document.addEventListener('focusin', function (event) {
   }
 
   /// `target="_blank"` and `window.open()`: keep the link inside the
-  /// browser by opening it as a new tab of our own.
+  /// browser by opening it as a new tab of our own — unless it is an
+  /// ad popup, which is swallowed instead.
   Future<bool?> _onCreateWindow(
     InAppWebViewController controller,
     CreateWindowAction action,
   ) async {
     final url = action.request.url?.toString();
-    if (url != null && url.isNotEmpty) _newTab(url: url);
+    if (url != null && url.isNotEmpty) {
+      final uri = Uri.tryParse(url);
+      if (uri != null && _adBlockOn && blocksAdHost(uri)) return true;
+      _newTab(url: url);
+    }
     // We created the "window": no separate web view is needed.
     return true;
   }
 
   /// Blocks main-frame jumps to schemes nothing can open yet (`tel:`,
-  /// `mailto:`, `intent:` ...) instead of letting them fail silently.
+  /// `mailto:`, `intent:` ...) and ad redirects, instead of letting
+  /// them fail silently or yanking the user off the page.
   Future<NavigationActionPolicy?> _overrideUrlLoading(
     InAppWebViewController controller,
     NavigationAction action,
   ) async {
     final url = action.request.url;
-    if (action.isForMainFrame &&
-        url != null &&
-        url.scheme != 'http' &&
-        url.scheme != 'https') {
-      return NavigationActionPolicy.CANCEL;
+    if (url != null && action.isForMainFrame) {
+      if (url.scheme != 'http' && url.scheme != 'https') {
+        return NavigationActionPolicy.CANCEL;
+      }
+      if (_adBlockOn && blocksAdHost(url)) {
+        return NavigationActionPolicy.CANCEL;
+      }
     }
     return NavigationActionPolicy.ALLOW;
   }
@@ -437,10 +455,11 @@ document.addEventListener('focusin', function (event) {
     }
   }
 
-  Widget _buildWebView(_BrowserTab tab) {
-    return InAppWebView(
-      key: ValueKey(tab.id),
-      initialSettings: InAppWebViewSettings(
+  /// The web view's settings. The only piece that changes after
+  /// creation is the ad-blocking rule set, so the toggle hands this
+  /// same object back with a different [InAppWebViewSettings.contentBlockers]
+  /// — everything else must stay identical or it would reset.
+  InAppWebViewSettings _buildSettings() => InAppWebViewSettings(
         // Let pages open their own windows: they become our tabs.
         supportMultipleWindows: true,
         javaScriptCanOpenWindowsAutomatically: true,
@@ -448,9 +467,48 @@ document.addEventListener('focusin', function (event) {
         // Players must be able to start without a gesture so their
         // video requests fire (the extractor relied on this too).
         mediaPlaybackRequiresUserGesture: false,
-      ),
+        // Native rules stop ad hosts and ad paths on every request.
+        // (A Dart shouldInterceptRequest would disable this path.)
+        contentBlockers: _adBlockOn ? adContentBlockers() : const [],
+      );
+
+  /// Switches ad blocking: the open pages swap their native rules and
+  /// their style script follows the flag.
+  void _toggleAdBlock() {
+    setState(() => _adBlockOn = !_adBlockOn);
+    final on = _adBlockOn;
+    for (final tab in List.of(_tabs)) {
+      final controller = tab.controller;
+      if (controller != null) _applyAdBlock(on, controller);
+    }
+  }
+
+  Future<void> _applyAdBlock(
+    bool on,
+    InAppWebViewController controller,
+  ) async {
+    try {
+      await controller.setSettings(settings: _buildSettings());
+      await controller.evaluateJavascript(
+        source: 'window.__mplayerAdBlock && window.__mplayerAdBlock($on)',
+      );
+    } catch (_) {
+      // The page went away mid-toggle; a fresh one opens with the
+      // current flag anyway.
+    }
+  }
+
+  Widget _buildWebView(_BrowserTab tab) {
+    return InAppWebView(
+      key: ValueKey(tab.id),
+      initialSettings: _buildSettings(),
       initialUserScripts: UnmodifiableListView<UserScript>([
         _pageFocusScript,
+        UserScript(
+          source: adHideScript(_adBlockOn),
+          injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+          forMainFrameOnly: false,
+        ),
       ]),
       onWebViewCreated: (controller) {
         tab.controller = controller;
@@ -495,6 +553,15 @@ document.addEventListener('focusin', function (event) {
               padding: const EdgeInsets.symmetric(horizontal: 4),
               children: [for (final tab in _tabs) _buildTabChip(tab)],
             ),
+          ),
+          IconButton(
+            onPressed: _toggleAdBlock,
+            icon: Icon(
+              _adBlockOn ? Icons.shield : Icons.shield_outlined,
+              size: 20,
+            ),
+            tooltip: 'Ad blocking',
+            visualDensity: VisualDensity.compact,
           ),
           IconButton(
             onPressed: _newTab,
