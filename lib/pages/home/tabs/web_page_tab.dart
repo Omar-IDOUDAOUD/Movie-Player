@@ -31,11 +31,14 @@ import 'package:movie_player/video_requests.dart';
 /// ([adHideScript]). The shield in the strip switches both off and on
 /// for every open page.
 ///
-/// Every resource a page loads is watched ([isVideoRequest]): when one
-/// of them is a video, an offer card rises from the bottom of the
-/// viewport with its address and a play button. Playing stops the
-/// media of every open page and hands the address to the app's own
-/// player, remembered in history under the page's title.
+/// Every resource a page loads is watched ([isVideoRequest]): every
+/// find is remembered on its tab, and the tab in front offers its
+/// newest find on a card at the bottom of the viewport — switching
+/// tabs away and back brings the offer up again, dismissing only
+/// hides it. The button next to reload lists every video found on the
+/// page. Playing one stops the media of every open page and hands the
+/// address to the app's own player, remembered in history under the
+/// page's title.
 class WebPageTab extends StatefulWidget {
   const WebPageTab({super.key});
 
@@ -64,18 +67,27 @@ class _BrowserTab {
   bool canGoForward = false;
 
   /// Last scroll position the page reported, in css pixels.
-  int scrollY = 0;
+  // int scrollY = 0;
 
   /// The position the top bar last snapped at; the bar toggles once
   /// the page has moved far enough away from it.
-  int scrollAnchor = 0;
+  // int scrollAnchor = 0;
 
   /// Set once the platform web view for this tab exists.
   InAppWebViewController? controller;
 
-  /// Addresses already offered as a video, so a stream re-requesting
-  /// its manifest does not raise the offer again.
-  final Set<String> offeredVideos = {};
+  /// Every video address found while this tab was open, oldest first
+  /// and once per address — the list behind the count badge and the
+  /// bottom sheet. It outlives the offer: dismissing the card does
+  /// not take a video off it.
+  final Set<String> videos = {};
+
+  /// The video this tab currently offers on its card at the bottom
+  /// of the viewport, or null: always the newest find, cleared when
+  /// the card is played, dismissed or the page navigates. Stored per
+  /// tab, so switching away and back brings an unplayed offer up
+  /// again.
+  String? offerUrl;
 }
 
 class WebPageTabState extends State<WebPageTab> {
@@ -109,33 +121,27 @@ class WebPageTabState extends State<WebPageTab> {
   /// pixels. The web view reports raw device pixels, so this is scaled
   /// by the device pixel ratio — a bare "16" would be ~5dp on a 3x
   /// screen and make the bar flip on every scroll wobble.
-  static const _snapThreshold = 56.0;
+  // static const _snapThreshold = 56.0;
 
   /// Minimum time between two snaps: flipping again while the bar is
   /// still animating reads as a glitch.
-  static const _snapCooldown = Duration(milliseconds: 300);
+  // static const _snapCooldown = Duration(milliseconds: 300);
 
-  static const _barAnimDuration = Duration(milliseconds: 180);
+  // static const _barAnimDuration = Duration(milliseconds: 180);
 
-  /// When the bar last snapped, for [_snapCooldown].
-  DateTime? _lastSnap;
+  // /// When the bar last snapped, for [_snapCooldown].
+  // DateTime? _lastSnap;
 
-  /// Whether the floating top bar currently covers the page.
-  var _barShown = true;
+  // /// Whether the floating top bar currently covers the page.
+  // var _barShown = true;
 
   /// Whether ad requests are blocked and ad leftovers hidden.
   var _adBlockOn = true;
 
-  /// The video the page in front offers to play, or null: the address
-  /// shown on the offer card at the bottom of the viewport. Only ever
-  /// set for the active tab, and cleared when it navigates or the
-  /// user switches tabs.
-  String? _offerUrl ;
-
-  bool get _canSnap {
-    final last = _lastSnap;
-    return last == null || DateTime.now().difference(last) >= _snapCooldown;
-  }
+  // bool get _canSnap {
+  //   final last = _lastSnap;
+  //   return last == null || DateTime.now().difference(last) >= _snapCooldown;
+  // }
 
   /// Tells every frame of every page to report when an input inside it
   /// takes focus (iframes included), so the address field lets go.
@@ -190,70 +196,70 @@ try {
 
   /// Brings the top bar back and remembers where the page stands now,
   /// so the next scroll decides from the current position.
-  void _showTopBar() {
-    final tab = _activeTab;
-    tab.scrollAnchor = tab.scrollY;
-    if (_barShown) return;
-    _lastSnap = DateTime.now();
-    setState(() => _barShown = true);
-  }
+  // void _showTopBar() {
+  //   final tab = _activeTab;
+  //   tab.scrollAnchor = tab.scrollY;
+  //   if (_barShown) return;
+  //   _lastSnap = DateTime.now();
+  //   setState(() => _barShown = true);
+  // }
 
   /// Flips the bar and restarts the snap cooldown. A snap that is
   /// still cooling down re-arms its anchor instead, so the same
   /// movement decides again one threshold later — nothing is lost and
   /// nothing flips twice in a row.
-  void _snap({required bool shown, required _BrowserTab tab, required int y}) {
-    if (!_canSnap) {
-      tab.scrollAnchor = y;
-      return;
-    }
-    _lastSnap = DateTime.now();
-    tab.scrollAnchor = y;
-    setState(() => _barShown = shown);
-  }
+  // void _snap({required bool shown, required _BrowserTab tab, required int y}) {
+  //   if (!_canSnap) {
+  //     tab.scrollAnchor = y;
+  //     return;
+  //   }
+  //   _lastSnap = DateTime.now();
+  //   tab.scrollAnchor = y;
+  //   setState(() => _barShown = shown);
+  // }
 
   /// Snaps the top bar with the page: away on the way down, back on
   /// the way up (or at the very top). Only the visible tab drives it.
-  void _handleScroll(_BrowserTab tab, int y) {
-    if (!mounted || !_tabs.contains(tab)) return;
-    tab.scrollY = y;
-    if (tab.id != _activeId) return;
-    // The address field keeps the bar pinned while it is focused.
-    if (_addressFocus.hasFocus) return;
+  // void _handleScroll(_BrowserTab tab, int y) {
+  //   if (!mounted || !_tabs.contains(tab)) return;
+  //   tab.scrollY = y;
+  //   if (tab.id != _activeId) return;
+  //   // The address field keeps the bar pinned while it is focused.
+  //   if (_addressFocus.hasFocus) return;
 
-    // The bar moves in logical pixels, the web view reports raw ones.
-    final threshold =
-        (MediaQuery.devicePixelRatioOf(context) * _snapThreshold).round();
+  //   // The bar moves in logical pixels, the web view reports raw ones.
+  //   final threshold =
+  //       (MediaQuery.devicePixelRatioOf(context) * _snapThreshold).round();
 
-    if (y <= 0) {
-      // At the very top the bar always shows; the next scroll down
-      // still needs the full threshold to hide it again.
-      tab.scrollAnchor = 0;
-      if (!_barShown) {
-        _lastSnap = DateTime.now();
-        setState(() => _barShown = true);
-      }
-      return;
-    }
+  //   if (y <= 0) {
+  //     // At the very top the bar always shows; the next scroll down
+  //     // still needs the full threshold to hide it again.
+  //     tab.scrollAnchor = 0;
+  //     if (!_barShown) {
+  //       _lastSnap = DateTime.now();
+  //       setState(() => _barShown = true);
+  //     }
+  //     return;
+  //   }
 
-    final anchor = tab.scrollAnchor;
-    if (_barShown) {
-      if (y - anchor >= threshold) {
-        _snap(shown: false, tab: tab, y: y);
-      } else if (y < anchor) {
-        // Keep the anchor at the topmost point: a reversal back down
-        // then hides the bar again after the threshold.
-        tab.scrollAnchor = y;
-      }
-    } else {
-      if (anchor - y >= threshold) {
-        _snap(shown: true, tab: tab, y: y);
-      } else if (y > anchor) {
-        // Follow the deepest point: scrolling up from it reveals.
-        tab.scrollAnchor = y;
-      }
-    }
-  }
+  //   final anchor = tab.scrollAnchor;
+  //   if (_barShown) {
+  //     if (y - anchor >= threshold) {
+  //       _snap(shown: false, tab: tab, y: y);
+  //     } else if (y < anchor) {
+  //       // Keep the anchor at the topmost point: a reversal back down
+  //       // then hides the bar again after the threshold.
+  //       tab.scrollAnchor = y;
+  //     }
+  //   } else {
+  //     if (anchor - y >= threshold) {
+  //       _snap(shown: true, tab: tab, y: y);
+  //     } else if (y > anchor) {
+  //       // Follow the deepest point: scrolling up from it reveals.
+  //       tab.scrollAnchor = y;
+  //     }
+  //   }
+  // }
 
   @override
   void initState() {
@@ -275,10 +281,8 @@ try {
     setState(() {
       _tabs.add(tab);
       _activeId = tab.id;
-      // The offer belonged to the page that is no longer in front.
-      _offerUrl = null;
     });
-    _showTopBar();
+    // _showTopBar();
     _syncAddress();
   }
 
@@ -294,8 +298,6 @@ try {
       if (_activeId == tab.id) {
         // The page that takes the closed one's place becomes active.
         _activeId = _tabs[index < _tabs.length ? index : _tabs.length - 1].id;
-        // Its offer, if any, belonged to the closed page.
-        _offerUrl = null;
       }
     });
     _syncAddress();
@@ -303,12 +305,11 @@ try {
 
   void _selectTab(int id) {
     if (id == _activeId) return;
-    setState(() {
-      _activeId = id;
-      // An offer is the front page's business only.
-      _offerUrl = null;
-    });
-    _showTopBar();
+    // The offer travels with its tab: what the viewport shows is
+    // whatever the tab in front holds, so coming back to a page
+    // brings its unplayed offer up again.
+    setState(() => _activeId = id);
+    // _showTopBar();
     _syncAddress();
   }
 
@@ -337,7 +338,7 @@ try {
       // Without a web view nothing will report progress back.
       if (tab.controller != null) tab.progress = 0;
     });
-    _showTopBar();
+    // _showTopBar();
 
     final controller = tab.controller;
     // Not created yet: it loads [tab.url] as soon as it is.
@@ -369,11 +370,12 @@ try {
     setState(() {
       tab.progress = 0;
       if (url != null && url.isNotEmpty) tab.url = url;
-      // The page the offer was made for is going away.
-      if (tab.id == _activeId) _offerUrl = null;
+      // The page the offer was made for is going away. The found
+      // videos stay: the list belongs to the tab, not the page.
+      tab.offerUrl = null;
     });
     if (tab.id == _activeId) {
-      _showTopBar();
+      // _showTopBar();
       _syncAddress();
     }
   }
@@ -427,50 +429,138 @@ try {
   // ------------------------------------------------------- video offer
 
   /// A resource the page finished loading: when it looks like a
-  /// video, offer it at the bottom of the viewport.
+  /// video, remember it for its tab and offer it at the bottom of
+  /// the viewport.
   ///
-  /// Only the page in front offers, and only once per address — an
-  /// HLS stream re-requests its manifest every few seconds. An ad's
-  /// video is never the page's video, so it is skipped while ad
-  /// blocking is on.
+  /// Every tab collects, so a page finishing in the background is
+  /// not lost. An address already known — offered, played or
+  /// dismissed — does not raise the card again: an HLS stream
+  /// re-requests its manifest every few seconds. A new find always
+  /// replaces the card that is up. An ad's video is never the page's
+  /// video, so it is skipped while ad blocking is on.
   void _handleResource(_BrowserTab tab, LoadedResource resource) {
-    // log("RESOURCE : ${resource.url}");
+    log("RESOURCE : ${resource.toMap()}");
     if (!mounted || !_tabs.contains(tab)) return;
-    if (tab.id != _activeId || _offerUrl != null) return;
 
     final url = resource.url?.toString();
+
     if (url == null) return;
     if (!isVideoRequest(url, initiatorType: resource.initiatorType)) return;
 
     final uri = Uri.tryParse(url);
     if (uri == null) return;
     if (_adBlockOn && blocksAdUrl(uri)) return;
-    if (!tab.offeredVideos.add(url)) return;
 
-    setState(() => _offerUrl = url);
+    setState(() {
+      tab.videos
+        ..removeWhere((element) => cleanUrl(element) == cleanUrl(url))
+        ..add(url);
+      tab.offerUrl = url;
+    });
+    log("EXTRACTED VIDEO : $url");
   }
 
-  /// Stops every open page's media — background tabs included, they
-  /// can keep playing under the player — and opens the app's player
-  /// on the offered address, remembered in history under the page's
-  /// title.
-  Future<void> _playOfferedVideo() async {
-    final url = _offerUrl;
-    if (url == null) return;
-    final tab = _activeTab;
-    // The offer has been acted on either way.
-    setState(() => _offerUrl = null);
+  /// Plays [url] in the app's player after stopping the media of
+  /// every open page — background tabs included, they can keep
+  /// playing under the player. History remembers the video under
+  /// the current page's title.
+  Future<void> _playVideo(String url) async {
+    final uri = Uri.tryParse(url);
+    if (uri == null) return;
+    final title = _activeTab.title;
 
     await _pauseAllPages();
 
-    final uri = Uri.tryParse(url);
-    if (uri == null || !mounted) return;
+    if (!mounted) return;
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => PlayerPage(
           videoUri: uri,
-          videoTitle: tab.title.isNotEmpty ? tab.title : null,
+          videoTitle: title.isNotEmpty ? title : null,
+        ),
+      ),
+    );
+  }
+
+  /// Plays what the card offers and lets the card go.
+  Future<void> _playOfferedVideo() async {
+    final tab = _activeTab;
+    final url = tab.offerUrl;
+    if (url == null) return;
+    setState(() => tab.offerUrl = null);
+    await _playVideo(url);
+  }
+
+  /// Hides the card; the video stays on the tab's list.
+  void _dismissOffer() {
+    final tab = _activeTab;
+    if (tab.offerUrl == null) return;
+    setState(() => tab.offerUrl = null);
+  }
+
+  /// Plays a video picked from the list; its card, if that is what
+  /// is up, has been used.
+  Future<void> _playFromSheet(String url) async {
+    final tab = _activeTab;
+    if (tab.offerUrl == url) setState(() => tab.offerUrl = null);
+    await _playVideo(url);
+  }
+
+  /// Every video found on the page behind the tab in front, one per
+  /// line: tap to play it in the app's player.
+  void _showFoundVideos() {
+    final videos = _activeTab.videos;
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      constraints:
+          BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * .7),
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Found videos',
+                  style: Theme.of(sheetContext).textTheme.titleMedium,
+                ),
+              ),
+            ),
+            if (videos.isEmpty)
+              const Padding(
+                padding: EdgeInsets.all(24),
+                child: Text(
+                  'No videos found on this page yet',
+                  textAlign: TextAlign.center,
+                ),
+              )
+            else
+              Expanded(
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  itemCount: videos.length,
+                  itemBuilder: (context, index) => ListTile(
+                    leading: const Icon(Icons.play_circle_outline_rounded),
+                    title: Text(
+                      describeVideoUrl(videos.elementAt(videos.length - index-1)),
+                      maxLines:2 ,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    onTap: () async {
+                      Navigator.pop(sheetContext);
+                      await _playFromSheet(
+                          videos.elementAt(videos.length - index-1));
+                    },
+                  ),
+                ),
+              ),
+          ],
         ),
       ),
     );
@@ -493,13 +583,16 @@ try {
     }
   }
 
-  /// Shows the offer for [url] the way a reported video request
-  /// would. Widget tests run without a web view to report one, so
-  /// they call this directly.
+  /// Shows the offer for [url] and puts it on the tab's list the way
+  /// a reported video request would. Widget tests run without a web
+  /// view to report one, so they call this directly.
   @visibleForTesting
   void debugShowVideoOffer(String url) {
-    _activeTab.offeredVideos.add(url);
-    setState(() => _offerUrl = url);
+    final tab = _activeTab;
+    setState(() {
+      if (!tab.videos.contains(url)) tab.videos.add(url);
+      tab.offerUrl = url;
+    });
   }
 
   /// `target="_blank"` and `window.open()`: keep the link inside the
@@ -675,14 +768,14 @@ try {
       onProgressChanged: (controller, progress) =>
           _handleProgress(tab, progress),
       onTitleChanged: (controller, title) => _handleTitle(tab, title),
-      onScrollChanged: (controller, x, y) => _handleScroll(tab, y),
+      // onScrollChanged: (controller, x, y) => _handleScroll(tab, y),
       onUpdateVisitedHistory: (controller, url, isReload) =>
           _handleHistory(tab, url?.toString()),
       onLoadResource: (controller, resource) => _handleResource(tab, resource),
-      shouldInterceptRequest: (controller, request) async{
-        // log("INTERC REQ : ${request.url}");
-        return null ;
-      },
+      // shouldInterceptRequest: (controller, request) async {
+      //   // log("INTERC REQ : ${request.url}");
+      //   return null;
+      // },
       shouldOverrideUrlLoading: _overrideUrlLoading,
       onCreateWindow: _onCreateWindow,
       onLongPressHitTestResult: _onLongPressHitTest,
@@ -806,7 +899,7 @@ try {
                 onSubmitted: (_) => _submitAddress(),
                 style: const TextStyle(fontSize: 14),
                 onTapOutside: (event) {
-                   _addressFocus.unfocus();
+                  _addressFocus.unfocus();
                 },
                 decoration: InputDecoration(
                   hintText: 'Search or enter url',
@@ -841,6 +934,16 @@ try {
               ),
             ),
             IconButton(
+              onPressed: _showFoundVideos,
+              icon: Badge(
+                isLabelVisible: active.videos.isNotEmpty,
+                label: Text('${active.videos.length}'),
+                child: const Icon(Icons.video_library, size: 22),
+              ),
+              tooltip: 'Found videos',
+              visualDensity: VisualDensity.compact,
+            ),
+            IconButton(
               onPressed: () => _onController(
                 (c) => active.progress < 100 ? c.stopLoading() : c.reload(),
               ),
@@ -870,9 +973,11 @@ try {
             // Room for the top bar while it shows; it collapses as the
             // bar slides away, so no page content is ever covered.
             AnimatedContainer(
-              duration: _barAnimDuration,
+              // duration: _barAnimDuration,
+              duration: Duration(microseconds: 0),
               curve: Curves.easeOut,
-              height: _barShown ? _topBarHeight : 0,
+              // height: _barShown ? _topBarHeight : 0,
+              height: _topBarHeight,
             ),
             if (active.progress < 100)
               LinearProgressIndicator(
@@ -895,8 +1000,10 @@ try {
           left: 0,
           right: 0,
           child: AnimatedSlide(
-            offset: _barShown ? Offset.zero : const Offset(0, -1),
-            duration: _barAnimDuration,
+            // offset: _barShown ? Offset.zero : const Offset(0, -1),
+            // duration: _barAnimDuration,
+            offset: Offset.zero,
+            duration: Duration(microseconds: 0),
             curve: Curves.easeOut,
             child: Material(
               color: Theme.of(context).colorScheme.surface,
@@ -912,16 +1019,19 @@ try {
           ),
         ),
         // A video the page started loading: offered at the bottom of
-        // the viewport until it is played or the page moves on.
-        if (_offerUrl != null)
+        // the viewport until it is played, dismissed or the page
+        // moves on. The offer belongs to its tab, so it is back when
+        // the user returns.
+        if (active.offerUrl != null)
           Positioned(
             left: 12,
             right: 12,
             bottom: 12,
             child: _VideoOfferToast(
               key: const ValueKey('video-offer-toast'),
-              url: _offerUrl!,
+              url: active.offerUrl!,
               onPlay: _playOfferedVideo,
+              onDismiss: _dismissOffer,
             ),
           ),
       ],
@@ -949,16 +1059,26 @@ class _NoWebViewNotice extends StatelessWidget {
   }
 }
 
-/// The offer card at the bottom of the page: the address that was
-/// found on one line, and the play button on the far right that hands
-/// it to the app's own player. Tapping anywhere on the card plays it.
+/// The offer card at the bottom of the page: the address on one line
+/// — host and last path node, meeting in the middle with '...' — a
+/// dismiss button, and the play button on the far right that hands
+/// it to the app's own player. Tapping anywhere else on the card
+/// plays it too.
 class _VideoOfferToast extends StatelessWidget {
-  const _VideoOfferToast({super.key, required this.url, required this.onPlay});
+  const _VideoOfferToast({
+    super.key,
+    required this.url,
+    required this.onPlay,
+    required this.onDismiss,
+  });
 
   /// The video address the page asked to load.
   final String url;
 
   final VoidCallback onPlay;
+
+  /// Hides the card without dropping the video from the tab's list.
+  final VoidCallback onDismiss;
 
   @override
   Widget build(BuildContext context) {
@@ -976,7 +1096,7 @@ class _VideoOfferToast extends StatelessWidget {
             left: 14,
             top: 10,
             bottom: 10,
-            right: 6,
+            right: 4,
           ),
           child: Row(
             children: [
@@ -994,13 +1114,19 @@ class _VideoOfferToast extends StatelessWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      url,
+                      describeVideoUrl(url),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(fontSize: 12, color: scheme.outline),
                     ),
                   ],
                 ),
+              ),
+              IconButton(
+                onPressed: onDismiss,
+                icon: const Icon(Icons.close_rounded, size: 20),
+                tooltip: 'Dismiss',
+                visualDensity: VisualDensity.compact,
               ),
               IconButton(
                 onPressed: onPlay,

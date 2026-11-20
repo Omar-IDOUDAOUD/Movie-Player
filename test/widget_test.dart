@@ -455,13 +455,12 @@ void main() {
     );
     await tester.pump();
 
-    // The offer names the video and offers a play button on the right.
+    // The offer names the video — host and last node, no scheme or
+    // query — with dismiss and play buttons to its right.
     expect(find.byKey(const ValueKey('video-offer-toast')), findsOneWidget);
     expect(find.text('Play This Video?'), findsOneWidget);
-    expect(
-      find.text('https://cdn.example.com/movies/the-thing.mp4?token=abc'),
-      findsOneWidget,
-    );
+    expect(find.text('cdn.example.com/.../the-thing.mp4'), findsOneWidget);
+    expect(find.byTooltip('Dismiss'), findsOneWidget);
     expect(find.byIcon(Icons.play_circle_fill_rounded), findsOneWidget);
     expect(find.byTooltip('Play'), findsOneWidget);
   });
@@ -486,27 +485,76 @@ void main() {
     );
   });
 
-  testWidgets('the offer goes away when the user moves on',
-      (WidgetTester tester) async {
+  testWidgets('the offer is remembered per tab', (WidgetTester tester) async {
     await openBrowser(tester);
 
     browserState(tester).debugShowVideoOffer('https://cdn.example.com/a.mp4');
     await tester.pump();
     expect(find.byKey(const ValueKey('video-offer-toast')), findsOneWidget);
 
-    // Opening another page takes the offer with it.
+    // A fresh page has nothing offered yet.
     await tester.tap(find.byTooltip('New tab'));
     await tester.pump();
     expect(find.byKey(const ValueKey('video-offer-toast')), findsNothing);
 
-    // Another video can be offered on the new page...
-    browserState(tester).debugShowVideoOffer('https://cdn.example.com/b.mp4');
-    await tester.pump();
-    expect(find.byKey(const ValueKey('video-offer-toast')), findsOneWidget);
-    // ...and switching pages takes that one too.
+    // Back to the first page: its offer is still up.
     await tester.tap(find.byKey(const ValueKey('browser-tab-0')));
     await tester.pump();
+    expect(find.byKey(const ValueKey('video-offer-toast')), findsOneWidget);
+    expect(find.text('cdn.example.com/a.mp4'), findsOneWidget);
+  });
+
+  testWidgets('dismissing hides the card but keeps the video listed',
+      (WidgetTester tester) async {
+    await openBrowser(tester);
+
+    browserState(tester).debugShowVideoOffer(
+      'https://cdn.example.com/movies/the-thing.mp4',
+    );
+    await tester.pump();
+
+    await tester.tap(find.byTooltip('Dismiss'));
+    await tester.pump();
     expect(find.byKey(const ValueKey('video-offer-toast')), findsNothing);
+
+    // The badge counts it anyway...
+    expect(find.text('1'), findsOneWidget);
+    expect(find.byTooltip('Found videos'), findsOneWidget);
+
+    // ...and the list behind the badge still holds it; tapping it
+    // plays it in the app's player.
+    await tester.tap(find.byTooltip('Found videos'));
+    await tester.pumpAndSettle();
+    expect(find.text('Found videos'), findsOneWidget);
+    expect(find.text('cdn.example.com/.../the-thing.mp4'), findsOneWidget);
+
+    await tester.tap(find.text('cdn.example.com/.../the-thing.mp4'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.byType(PlayerPage), findsOneWidget);
+  });
+
+  testWidgets('the newest find is offered and all are listed',
+      (WidgetTester tester) async {
+    await openBrowser(tester);
+
+    browserState(tester).debugShowVideoOffer('https://cdn.example.com/a.mp4');
+    await tester.pump();
+    browserState(tester).debugShowVideoOffer('https://cdn.example.com/b.mp4');
+    await tester.pump();
+
+    // The card always shows the last found video, the first is only
+    // on the list behind the badge.
+    expect(find.text('cdn.example.com/a.mp4'), findsNothing);
+    expect(find.text('cdn.example.com/b.mp4'), findsOneWidget);
+    expect(find.text('2'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Found videos'));
+    await tester.pumpAndSettle();
+    expect(find.text('Found videos'), findsOneWidget);
+    expect(find.text('cdn.example.com/a.mp4'), findsOneWidget);
+    // Both are listed, the offered one among them.
+    expect(find.byType(ListTile), findsNWidgets(2));
   });
 
   // ------------------------------------------------------ shared into app

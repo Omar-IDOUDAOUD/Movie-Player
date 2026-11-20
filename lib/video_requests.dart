@@ -1,3 +1,5 @@
+import 'dart:developer';
+
 import 'package:movie_player/html_video_scraper.dart' show isVideoUrl;
 
 /// Whether the resource at [url] is worth offering as a video.
@@ -25,4 +27,34 @@ bool isVideoRequest(String url, {String? initiatorType}) {
 
   if (isVideoUrl(url)) return true;
   return initiatorType == 'video' || initiatorType == 'audio';
+}
+
+/// The part of [url] worth showing on the offer card and in the list
+/// of found videos: host and last path node, without the scheme,
+/// query or fragment.
+///
+/// A path of two or more nodes keeps its ends and meets in the
+/// middle — `cdn.example.com/.../the-thing.mp4`. The host says where
+/// the video comes from, the last node what it is; the middle rarely
+/// says anything a long signed address does not already bury.
+String describeVideoUrl(String url) {
+
+  url = cleanUrl(url);
+
+  const maxStartLength = 32;
+  const maxEndLength = 32;
+  const maxLength = maxStartLength + maxEndLength;
+
+  if (url.length <= maxLength) return url;
+
+  return '${url.substring(0, maxStartLength)}...'
+      '${url.substring(url.length - maxEndLength)}';
+}
+
+String cleanUrl(String url) {
+  final uri = Uri.tryParse(url);
+  log(uri?.toString()??"null", name: "URRls");
+  if (uri == null) return url;
+
+  return Uri(scheme: uri.scheme, host: uri.host, port: uri.port, path: uri.path).toString();
 }

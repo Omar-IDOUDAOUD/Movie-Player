@@ -43,4 +43,25 @@ void main() {
       isFalse,
     );
   });
+
+  test('the shown address keeps host and last path node', () {
+    // No scheme, no query: what the video is called and where it
+    // comes from.
+    expect(
+      describeVideoUrl('https://cdn.example.com/movies/the-thing.mp4?sig=1'),
+      'cdn.example.com/.../the-thing.mp4',
+    );
+    // A single path node has no middle to collapse.
+    expect(
+      describeVideoUrl('https://example.com/v.mp4'),
+      'example.com/v.mp4',
+    );
+    // The port stays: it says which machine to reach.
+    expect(
+      describeVideoUrl('http://localhost:8080/streams/live.m3u8'),
+      'localhost:8080/.../live.m3u8',
+    );
+    // Nothing to parse: shown as it is.
+    expect(describeVideoUrl('not a url'), 'not a url');
+  });
 }
