@@ -12,6 +12,7 @@ import 'package:movie_player/main.dart';
 import 'package:movie_player/folder_repo.dart';
 import 'package:movie_player/pages/player/player_page.dart';
 import 'package:movie_player/pages/folder_videos/folder_videos_page.dart';
+import 'package:movie_player/pages/home/tabs/web_page_tab.dart';
 import 'package:movie_player/link_parser.dart';
 import 'package:movie_player/watch_history.dart';
 
@@ -434,6 +435,78 @@ void main() {
     await tester.pump();
     expect(find.byIcon(Icons.shield), findsOneWidget);
     expect(find.byIcon(Icons.shield_outlined), findsNothing);
+  });
+
+  // ------------------------------------------------------------ video offer
+
+  /// The browser's state, where a reported video request would land.
+  WebPageTabState browserState(WidgetTester tester) =>
+      tester.state<WebPageTabState>(find.byType(WebPageTab));
+
+  testWidgets('a video the page loads is offered at the bottom',
+      (WidgetTester tester) async {
+    await openBrowser(tester);
+
+    // No video found yet: no offer card.
+    expect(find.byKey(const ValueKey('video-offer-toast')), findsNothing);
+
+    browserState(tester).debugShowVideoOffer(
+      'https://cdn.example.com/movies/the-thing.mp4?token=abc',
+    );
+    await tester.pump();
+
+    // The offer names the video and offers a play button on the right.
+    expect(find.byKey(const ValueKey('video-offer-toast')), findsOneWidget);
+    expect(find.text('Play This Video?'), findsOneWidget);
+    expect(
+      find.text('https://cdn.example.com/movies/the-thing.mp4?token=abc'),
+      findsOneWidget,
+    );
+    expect(find.byIcon(Icons.play_circle_fill_rounded), findsOneWidget);
+    expect(find.byTooltip('Play'), findsOneWidget);
+  });
+
+  testWidgets('playing the offered video opens the player',
+      (WidgetTester tester) async {
+    await openBrowser(tester);
+
+    browserState(tester)
+        .debugShowVideoOffer('https://cdn.example.com/movies/the-thing.mp4');
+    await tester.pump();
+
+    await tester.tap(find.byTooltip('Play'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+
+    expect(find.byType(PlayerPage), findsOneWidget);
+    // The offer was used up, not left behind under the player.
+    expect(
+      find.byKey(const ValueKey('video-offer-toast'), skipOffstage: false),
+      findsNothing,
+    );
+  });
+
+  testWidgets('the offer goes away when the user moves on',
+      (WidgetTester tester) async {
+    await openBrowser(tester);
+
+    browserState(tester).debugShowVideoOffer('https://cdn.example.com/a.mp4');
+    await tester.pump();
+    expect(find.byKey(const ValueKey('video-offer-toast')), findsOneWidget);
+
+    // Opening another page takes the offer with it.
+    await tester.tap(find.byTooltip('New tab'));
+    await tester.pump();
+    expect(find.byKey(const ValueKey('video-offer-toast')), findsNothing);
+
+    // Another video can be offered on the new page...
+    browserState(tester).debugShowVideoOffer('https://cdn.example.com/b.mp4');
+    await tester.pump();
+    expect(find.byKey(const ValueKey('video-offer-toast')), findsOneWidget);
+    // ...and switching pages takes that one too.
+    await tester.tap(find.byKey(const ValueKey('browser-tab-0')));
+    await tester.pump();
+    expect(find.byKey(const ValueKey('video-offer-toast')), findsNothing);
   });
 
   // ------------------------------------------------------ shared into app

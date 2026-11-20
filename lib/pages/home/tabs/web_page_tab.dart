@@ -1,4 +1,5 @@
 import 'dart:collection';
+import 'dart:developer';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -7,6 +8,8 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 import 'package:movie_player/ad_filter.dart';
 import 'package:movie_player/link_parser.dart';
+import 'package:movie_player/pages/player/player_page.dart';
+import 'package:movie_player/video_requests.dart';
 
 /// The "Web page" tab: a small browser.
 ///
@@ -27,11 +30,17 @@ import 'package:movie_player/link_parser.dart';
 /// start script hides what a blocked request leaves behind
 /// ([adHideScript]). The shield in the strip switches both off and on
 /// for every open page.
+///
+/// Every resource a page loads is watched ([isVideoRequest]): when one
+/// of them is a video, an offer card rises from the bottom of the
+/// viewport with its address and a play button. Playing stops the
+/// media of every open page and hands the address to the app's own
+/// player, remembered in history under the page's title.
 class WebPageTab extends StatefulWidget {
   const WebPageTab({super.key});
 
   @override
-  State<WebPageTab> createState() => _WebPageTabState();
+  State<WebPageTab> createState() => WebPageTabState();
 }
 
 /// One open browser page.
@@ -63,9 +72,13 @@ class _BrowserTab {
 
   /// Set once the platform web view for this tab exists.
   InAppWebViewController? controller;
+
+  /// Addresses already offered as a video, so a stream re-requesting
+  /// its manifest does not raise the offer again.
+  final Set<String> offeredVideos = {};
 }
 
-class _WebPageTabState extends State<WebPageTab> {
+class WebPageTabState extends State<WebPageTab> {
   static const _homeUrl = 'https://www.google.com';
 
   /// Every page of the browser, oldest first; never empty (closing the
@@ -113,6 +126,12 @@ class _WebPageTabState extends State<WebPageTab> {
   /// Whether ad requests are blocked and ad leftovers hidden.
   var _adBlockOn = true;
 
+  /// The video the page in front offers to play, or null: the address
+  /// shown on the offer card at the bottom of the viewport. Only ever
+  /// set for the active tab, and cleared when it navigates or the
+  /// user switches tabs.
+  String? _offerUrl ;
+
   bool get _canSnap {
     final last = _lastSnap;
     return last == null || DateTime.now().difference(last) >= _snapCooldown;
@@ -131,6 +150,39 @@ document.addEventListener('focusin', function (event) {
     if (bridge && bridge.callHandler) bridge.callHandler('pageInputFocused');
   }
 }, true);
+''',
+    injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+    forMainFrameOnly: false,
+  );
+
+  /// Runs in every frame of every page: pauses its `video`/`audio`
+  /// elements when the app broadcasts `__mplayer_pause` and passes
+  /// the word to the frames it contains, so an embedded player stops
+  /// too — the cascade walks the whole frame tree of a page.
+  ///
+  /// The same script widens the resource timing buffer: a busy page
+  /// would drop resource reports after ~250 and with them the video
+  /// request the offer card waits for.
+  static final _pageMediaScript = UserScript(
+    source: '''
+window.addEventListener('message', function (event) {
+  if (event.data !== '__mplayer_pause') return;
+  var media = document.querySelectorAll('video, audio');
+  for (var i = 0; i < media.length; i++) {
+    try { media[i].pause(); } catch (e) {}
+  }
+  var frames = document.querySelectorAll('iframe');
+  for (var j = 0; j < frames.length; j++) {
+    try {
+      frames[j].contentWindow.postMessage('__mplayer_pause', '*');
+    } catch (e) {}
+  }
+}, false);
+try {
+  if (window.performance && performance.setResourceTimingBufferSize) {
+    performance.setResourceTimingBufferSize(1000);
+  }
+} catch (e) {}
 ''',
     injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
     forMainFrameOnly: false,
@@ -223,6 +275,8 @@ document.addEventListener('focusin', function (event) {
     setState(() {
       _tabs.add(tab);
       _activeId = tab.id;
+      // The offer belonged to the page that is no longer in front.
+      _offerUrl = null;
     });
     _showTopBar();
     _syncAddress();
@@ -240,6 +294,8 @@ document.addEventListener('focusin', function (event) {
       if (_activeId == tab.id) {
         // The page that takes the closed one's place becomes active.
         _activeId = _tabs[index < _tabs.length ? index : _tabs.length - 1].id;
+        // Its offer, if any, belonged to the closed page.
+        _offerUrl = null;
       }
     });
     _syncAddress();
@@ -247,7 +303,11 @@ document.addEventListener('focusin', function (event) {
 
   void _selectTab(int id) {
     if (id == _activeId) return;
-    setState(() => _activeId = id);
+    setState(() {
+      _activeId = id;
+      // An offer is the front page's business only.
+      _offerUrl = null;
+    });
     _showTopBar();
     _syncAddress();
   }
@@ -309,6 +369,8 @@ document.addEventListener('focusin', function (event) {
     setState(() {
       tab.progress = 0;
       if (url != null && url.isNotEmpty) tab.url = url;
+      // The page the offer was made for is going away.
+      if (tab.id == _activeId) _offerUrl = null;
     });
     if (tab.id == _activeId) {
       _showTopBar();
@@ -360,6 +422,84 @@ document.addEventListener('focusin', function (event) {
     } catch (_) {
       // The web view went away while it was being asked.
     }
+  }
+
+  // ------------------------------------------------------- video offer
+
+  /// A resource the page finished loading: when it looks like a
+  /// video, offer it at the bottom of the viewport.
+  ///
+  /// Only the page in front offers, and only once per address — an
+  /// HLS stream re-requests its manifest every few seconds. An ad's
+  /// video is never the page's video, so it is skipped while ad
+  /// blocking is on.
+  void _handleResource(_BrowserTab tab, LoadedResource resource) {
+    // log("RESOURCE : ${resource.url}");
+    if (!mounted || !_tabs.contains(tab)) return;
+    if (tab.id != _activeId || _offerUrl != null) return;
+
+    final url = resource.url?.toString();
+    if (url == null) return;
+    if (!isVideoRequest(url, initiatorType: resource.initiatorType)) return;
+
+    final uri = Uri.tryParse(url);
+    if (uri == null) return;
+    if (_adBlockOn && blocksAdUrl(uri)) return;
+    if (!tab.offeredVideos.add(url)) return;
+
+    setState(() => _offerUrl = url);
+  }
+
+  /// Stops every open page's media — background tabs included, they
+  /// can keep playing under the player — and opens the app's player
+  /// on the offered address, remembered in history under the page's
+  /// title.
+  Future<void> _playOfferedVideo() async {
+    final url = _offerUrl;
+    if (url == null) return;
+    final tab = _activeTab;
+    // The offer has been acted on either way.
+    setState(() => _offerUrl = null);
+
+    await _pauseAllPages();
+
+    final uri = Uri.tryParse(url);
+    if (uri == null || !mounted) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PlayerPage(
+          videoUri: uri,
+          videoTitle: tab.title.isNotEmpty ? tab.title : null,
+        ),
+      ),
+    );
+  }
+
+  /// Asks every open page to stop its media. The message reaches
+  /// each frame through [_pageMediaScript], which cascades it into
+  /// the frames each page contains.
+  Future<void> _pauseAllPages() async {
+    for (final tab in List.of(_tabs)) {
+      final controller = tab.controller;
+      if (controller == null) continue;
+      try {
+        await controller.evaluateJavascript(
+          source: "window.postMessage('__mplayer_pause', '*')",
+        );
+      } catch (_) {
+        // A page that went away mid-pause has nothing left to stop.
+      }
+    }
+  }
+
+  /// Shows the offer for [url] the way a reported video request
+  /// would. Widget tests run without a web view to report one, so
+  /// they call this directly.
+  @visibleForTesting
+  void debugShowVideoOffer(String url) {
+    _activeTab.offeredVideos.add(url);
+    setState(() => _offerUrl = url);
   }
 
   /// `target="_blank"` and `window.open()`: keep the link inside the
@@ -467,6 +607,10 @@ document.addEventListener('focusin', function (event) {
         // Players must be able to start without a gesture so their
         // video requests fire (the extractor relied on this too).
         mediaPlaybackRequiresUserGesture: false,
+        // Report every resource the page loads, so videos can be
+        // offered. Kept explicit: the ad toggle re-sends this whole
+        // settings object and would drop anything left unset.
+        useOnLoadResource: true,
         // Native rules stop ad hosts and ad paths on every request.
         // (A Dart shouldInterceptRequest would disable this path.)
         contentBlockers: _adBlockOn ? adContentBlockers() : const [],
@@ -504,6 +648,7 @@ document.addEventListener('focusin', function (event) {
       initialSettings: _buildSettings(),
       initialUserScripts: UnmodifiableListView<UserScript>([
         _pageFocusScript,
+        _pageMediaScript,
         UserScript(
           source: adHideScript(_adBlockOn),
           injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
@@ -533,6 +678,11 @@ document.addEventListener('focusin', function (event) {
       onScrollChanged: (controller, x, y) => _handleScroll(tab, y),
       onUpdateVisitedHistory: (controller, url, isReload) =>
           _handleHistory(tab, url?.toString()),
+      onLoadResource: (controller, resource) => _handleResource(tab, resource),
+      shouldInterceptRequest: (controller, request) async{
+        // log("INTERC REQ : ${request.url}");
+        return null ;
+      },
       shouldOverrideUrlLoading: _overrideUrlLoading,
       onCreateWindow: _onCreateWindow,
       onLongPressHitTestResult: _onLongPressHitTest,
@@ -655,6 +805,9 @@ document.addEventListener('focusin', function (event) {
                 onChanged: (_) => setState(() {}),
                 onSubmitted: (_) => _submitAddress(),
                 style: const TextStyle(fontSize: 14),
+                onTapOutside: (event) {
+                   _addressFocus.unfocus();
+                },
                 decoration: InputDecoration(
                   hintText: 'Search or enter url',
                   isDense: true,
@@ -758,6 +911,19 @@ document.addEventListener('focusin', function (event) {
             ),
           ),
         ),
+        // A video the page started loading: offered at the bottom of
+        // the viewport until it is played or the page moves on.
+        if (_offerUrl != null)
+          Positioned(
+            left: 12,
+            right: 12,
+            bottom: 12,
+            child: _VideoOfferToast(
+              key: const ValueKey('video-offer-toast'),
+              url: _offerUrl!,
+              onPlay: _playOfferedVideo,
+            ),
+          ),
       ],
     );
   }
@@ -777,6 +943,77 @@ class _NoWebViewNotice extends StatelessWidget {
           'The browser runs inside the Android app',
           textAlign: TextAlign.center,
           style: TextStyle(color: Theme.of(context).colorScheme.outline),
+        ),
+      ),
+    );
+  }
+}
+
+/// The offer card at the bottom of the page: the address that was
+/// found on one line, and the play button on the far right that hands
+/// it to the app's own player. Tapping anywhere on the card plays it.
+class _VideoOfferToast extends StatelessWidget {
+  const _VideoOfferToast({super.key, required this.url, required this.onPlay});
+
+  /// The video address the page asked to load.
+  final String url;
+
+  final VoidCallback onPlay;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      color: scheme.surfaceContainerHighest,
+      elevation: 6,
+      borderRadius: BorderRadius.circular(14),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onPlay,
+        child: Padding(
+          padding: const EdgeInsets.only(
+            left: 14,
+            top: 10,
+            bottom: 10,
+            right: 6,
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Play This Video?',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        color: scheme.onSurface,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      url,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 12, color: scheme.outline),
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                onPressed: onPlay,
+                icon: Icon(
+                  Icons.play_circle_fill_rounded,
+                  color: scheme.primary,
+                  size: 36,
+                ),
+                tooltip: 'Play',
+                visualDensity: VisualDensity.compact,
+              ),
+            ],
+          ),
         ),
       ),
     );
